@@ -1,0 +1,12 @@
+{
+  "name": "profile-autocomplete",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI 招聘表单自动填写浏览器扩展（Edge / MV3）。零构建；这里只有开发期测试工具。",
+  "scripts": {
+    "test": "node test/verify-collector.mjs"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^23.11.1"
+  }
+}

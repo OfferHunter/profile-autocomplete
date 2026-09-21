@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>Profile Autocomplete — 采集器 fixture</title>
+    <style>
+      /* 所有 class 名都故意取得无意义，用来验证采集器不依赖 class */
+      body { font: 14px/1.7 "Microsoft YaHei", system-ui, sans-serif; max-width: 820px; margin: 24px auto; padding: 0 16px; color: #222; }
+      h1 { font-size: 20px; }
+      h2 { font-size: 15px; margin-top: 28px; padding-top: 10px; border-top: 1px solid #e2e2e2; }
+      .z1, .z2, .z3, .z4, .z9, .z10, .z11, .z12 { margin: 8px 0; }
+      label { display: inline-block; min-width: 130px; }
+      input[type="text"], input[type="email"], input[type="tel"], select, textarea { padding: 4px 6px; }
+      table { border-collapse: collapse; margin: 8px 0; }
+      th { text-align: left; font-weight: normal; padding: 6px 18px 6px 0; }
+      fieldset { margin: 10px 0; padding: 10px 14px; border: 1px solid #d5d5d5; }
+      .note { background: #f4f7ff; border-left: 3px solid #4c8dff; padding: 8px 12px; color: #445; font-size: 13px; }
+      .z10b { display: inline-block; min-width: 160px; border: 1px solid #bbb; padding: 4px 8px; cursor: pointer; }
+      .z10d { float: right; color: #888; }
+      .z10e { border: 1px solid #bbb; width: 180px; background: #fff; }
+      .z10e > div { padding: 4px 8px; cursor: pointer; }
+      .z10e > div:hover { background: #eef3ff; }
+      .z8 { position: relative; }
+      .z8 input[type="file"] { position: absolute; left: -9999px; width: 1px; height: 1px; }
+      .z8 button { padding: 5px 12px; cursor: pointer; }
+      iframe { width: 100%; height: 190px; border: 1px solid #d5d5d5; margin-top: 8px; }
+      code { background: #f2f2f2; padding: 1px 4px; border-radius: 3px; }
+    </style>
+  </head>
+  <body>
+    <h1>采集器 fixture</h1>
+    <p class="note">
+      这个页面覆盖了各种标签关联方式与控件形态。所有 class 都是无意义的，<b>采集器不应该读它们</b>。
+    </p>
+
+    <form id="main" onsubmit="return false">
+      <h2>一、标准 label[for]</h2>
+      <div class="z1"><label for="a1">姓名</label><input id="a1" name="fullName" type="text" /></div>
+      <div class="z2"><label for="a2">电子邮箱</label><input id="a2" name="email" type="email" required /></div>
+
+      <h2>二、包裹式 label</h2>
+      <div class="z3"><label>手机号码 <input name="mobile" type="tel" /></label></div>
+
+      <h2>三、aria-label / aria-labelledby</h2>
+      <div class="z4">
+        <input aria-label="身份证号码" name="idNo" type="text" />
+        <span id="lbl-x">紧急联系人姓名</span>
+        <input aria-labelledby="lbl-x" name="ecName" type="text" />
+      </div>
+
+      <h2>四、表格布局</h2>
+      <table class="z6">
+        <tr><th>毕业院校</th><td><input name="school" type="text" /></td></tr>
+        <tr><th>所学专业</th><td><input name="major" type="text" /></td></tr>
+      </table>
+
+      <h2>五、fieldset &gt; legend 区块</h2>
+      <fieldset class="z7">
+        <legend>实习经历</legend>
+        <div><label for="w1">公司名称</label><input id="w1" name="company" type="text" /></div>
+        <div><label for="w2">职位名称</label><input id="w2" name="title" type="text" /></div>
+      </fieldset>
+
+      <h2>六、原生 select / radio / checkbox</h2>
+      <div>
+        <label for="deg">最高学历</label>
+        <select id="deg" name="degree">
+          <option value="">请选择</option>
+          <option value="bachelor">本科</option>
+          <option value="master">硕士</option>
+          <option value="phd">博士</option>
+        </select>
+      </div>
+      <div class="z13">
+        性别：
+        <label><input type="radio" name="gender" value="male" /> 男</label>
+        <label><input type="radio" name="gender" value="female" /> 女</label>
+      </div>
+      <div class="z14">
+        <label><input type="checkbox" name="agree" value="1" /> 我已阅读并同意相关条款</label>
+      </div>
+
+      <h2>七、div 假下拉框（验证降级路径）</h2>
+      <div class="z10">
+        <span class="z10a" id="fake-lbl">期望工作城市</span>
+        <div class="z10b" role="combobox" aria-expanded="false" aria-labelledby="fake-lbl" tabindex="0">
+          <span class="z10c">请选择</span><span class="z10d">▾</span>
+        </div>
+        <div class="z10e" role="listbox" hidden>
+          <div role="option" data-value="bj">北京</div>
+          <div role="option" data-value="sh">上海</div>
+          <div role="option" data-value="sz">深圳</div>
+        </div>
+      </div>
+
+      <h2>八、模拟 React 受控组件</h2>
+      <div class="z11">
+        <label for="ctl">自我评价</label>
+        <input id="ctl" type="text" />
+      </div>
+      <p>
+        <button type="button" id="rerender">模拟重新渲染</button>
+        <span id="ctlstate">state=""</span>
+        <br />
+        <small>填完后点这个按钮：值被清空 → 说明是直接赋值（React 会丢掉）；值保留 → 说明写法正确。</small>
+      </p>
+
+      <h2>九、视觉隐藏的真实上传入口</h2>
+      <div class="z8">
+        <label for="cv">简历附件</label>
+        <input id="cv" type="file" name="resume" />
+        <button type="button" onclick="document.getElementById('cv').click()">选择文件</button>
+        <small>（真实的 file input 被挪到视口外，是真实入口，必须保留）</small>
+      </div>
+
+      <h2>十、纯几何：无 label、无 aria、无 name、无 id</h2>
+      <div class="z9">
+        <span class="z9a">期望薪资</span>
+        <input type="text" />
+        <small>← 只能靠几何邻域找到"期望薪资"这四个字</small>
+      </div>
+
+      <h2>十一、动态插入（验证幂等 ID 不漂移）</h2>
+      <div class="z12">
+        <div id="dynhost">
+          <div><label for="d0">原有字段</label><input id="d0" type="text" /></div>
+        </div>
+      </div>
+      <p><button type="button" id="addfield">在原有字段之前插入一个新字段</button></p>
+
+      <input type="hidden" name="csrfToken" value="should-be-filtered" />
+    </form>
+
+    <h2>十二、iframe 内的表单（验证多 frame 汇总）</h2>
+    <iframe id="child"></iframe>
+
+    <script>
+      // ---- 模拟 React 受控组件：state 才是真相，DOM 值会被回写 ----
+      const ctl = document.getElementById("ctl");
+      let ctlState = "";
+      ctl.addEventListener("input", () => {
+        ctlState = ctl.value;
+        document.getElementById("ctlstate").textContent = 'state="' + ctlState + '"';
+      });
+      document.getElementById("rerender").addEventListener("click", () => {
+        // React 重新渲染时把 DOM 值强制回写成 state
+        if (ctl.value !== ctlState) ctl.value = ctlState;
+      });
+
+      // ---- 动态插入：故意插在最前面，验证已有字段的 id 不被重排 ----
+      let dynSeq = 0;
+      document.getElementById("addfield").addEventListener("click", () => {
+        dynSeq += 1;
+        const wrap = document.createElement("div");
+        wrap.innerHTML =
+          '<label for="d' + dynSeq + '">动态字段' + dynSeq + '</label>' +
+          '<input id="d' + dynSeq + '" type="text" />';
+        const host = document.getElementById("dynhost");
+        host.insertBefore(wrap, host.firstElementChild);
+      });
+
+      // ---- iframe 表单 ----
+      document.getElementById("child").srcdoc =
+        '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><style>' +
+        'body{font:14px/1.7 "Microsoft YaHei",sans-serif;padding:12px}' +
+        'label{display:inline-block;min-width:110px}</style></head><body>' +
+        '<h2 style="font-size:14px;margin:0 0 8px">iframe 内的表单</h2>' +
+        '<div><label for="i1">推荐人姓名</label><input id="i1" type="text"></div>' +
+        '<div><label for="i2">推荐人电话</label><input id="i2" type="tel"></div>' +
+        '</body></html>';
+    </script>
+  </body>
+</html>

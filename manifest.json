@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Profile Autocomplete",
+  "version": "0.1.0",
+  "description": "用 AI 识别招聘表单字段并自动填写，答案沉淀为键库，越用越快。",
+  "permissions": ["storage", "sidePanel", "tabs", "scripting"],
+  "host_permissions": ["https://api.deepseek.com/*"],
+  "background": {
+    "service_worker": "src/background/service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content/collector.js", "src/content/main.js"],
+      "run_at": "document_idle",
+      "all_frames": true,
+      "match_about_blank": true
+    }
+  ],
+  "side_panel": {
+    "default_path": "src/sidepanel/sidepanel.html"
+  },
+  "action": {
+    "default_title": "Profile Autocomplete"
+  }
+}

@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>Profile Autocomplete</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <header>
+      <div class="title">Profile Autocomplete</div>
+      <div class="tabsite" id="tabsite">—</div>
+    </header>
+
+    <div class="toolbar">
+      <button id="scan" class="primary">扫描当前页面</button>
+      <span id="status" class="status"></span>
+    </div>
+
+    <main id="out">
+      <p class="empty">点击「扫描当前页面」开始。此阶段只采集与展示，不写入任何值。</p>
+    </main>
+
+    <details id="rawwrap" hidden>
+      <summary>原始描述符 JSON</summary>
+      <pre id="raw"></pre>
+    </details>
+
+    <script src="sidepanel.js"></script>
+  </body>
+</html>
