@@ -20,6 +20,14 @@
       .z10e { border: 1px solid #bbb; width: 180px; background: #fff; }
       .z10e > div { padding: 4px 8px; cursor: pointer; }
       .z10e > div:hover { background: #eef3ff; }
+      /* 真实的区块标题常常只是一个字号大一点的 span，没有任何语义标签 */
+      .z15a { display: block; font-size: 17px; font-weight: 600; margin: 10px 0 6px; }
+      .z16a { display: block; font-size: 17px; font-weight: 600; margin: 10px 0 6px; }
+      .z16gap { height: 620px; }
+      /* 文档标注：字号与字重都保持普通，这样不会被误认成区块标题 */
+      .doc { color: #667; font-size: 14px; font-weight: 400; margin: 28px 0 6px; padding-top: 10px; border-top: 1px solid #e2e2e2; }
+      .z18wrap { display: inline-block; }
+      .z18view { border: 1px solid #bbb; padding: 4px 8px; min-width: 150px; background: #fff; }
       .z8 { position: relative; }
       .z8 input[type="file"] { position: absolute; left: -9999px; width: 1px; height: 1px; }
       .z8 button { padding: 5px 12px; cursor: pointer; }
@@ -127,6 +135,96 @@
         </div>
       </div>
       <p><button type="button" id="addfield">在原有字段之前插入一个新字段</button></p>
+
+      <h2>十三、样式化 span 当区块标题（无任何语义标签）</h2>
+      <div class="z15">
+        <span class="z15a">家庭成员情况</span>
+        <div><label for="f1">成员姓名</label><input id="f1" type="text" /></div>
+        <div><label for="f2">与本人关系</label><input id="f2" type="text" /></div>
+      </div>
+
+      <!-- 这条用普通 div 而不是 h2：避免 fixture 自己的文档标题被当成区块标题，
+           从而能干净地测"标题离字段很远"这个场景 -->
+      <div class="doc">十四、长区块：区块标题离字段 620px（旧的 500px 上限会漏掉）</div>
+      <div class="z16">
+        <span class="z16a">证书与荣誉</span>
+        <div class="z16gap"></div>
+        <div><label for="g1">证书名称</label><input id="g1" type="text" /></div>
+      </div>
+
+      <!-- 真实站点（中信银行 = bootstrap-select）的结构：原生 <select> 被 CSS 设成
+           display:block + width:0.5px + opacity:0，可见外观是紧邻的一个 <button>；
+           同一份选项还渲染进一个默认隐藏的 role=combobox / role=listbox 面板。
+           面板不是字段，真身是那个隐身的原生 select。 -->
+      <h2>十五、bootstrap-select：隐身原生 select + 关闭的选择弹层</h2>
+      <div class="z17">
+        <div><span style="color:red;">*</span>国籍/地区</div>
+        <div class="bootstrap-select">
+          <select id="nat" name="nationality" class="selectpicker" style="opacity:0;width:0.5px;height:28px">
+            <option value="">请选择</option>
+            <option value="156">中国</option>
+            <option value="840">美国</option>
+          </select>
+          <button type="button" class="dropdown-toggle" role="button" title="请选择">
+            <div class="filter-option"><div class="filter-option-inner">请选择</div></div>
+          </button>
+          <div class="dropdown-menu" role="combobox" style="display:none">
+            <div class="bs-searchbox"><input type="text" autocomplete="off" role="textbox" aria-label="Search" /></div>
+            <div class="inner" role="listbox">
+              <ul>
+                <li><a role="option"><span class="text">请选择</span></a></li>
+                <li><a role="option"><span class="text">中国</span></a></li>
+                <li><a role="option"><span class="text">美国</span></a></li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 另一类框架：直接把原生 select 设成 display:none，元素完全没有布局盒。
+           可见外观由一个兄弟节点承担 —— 零尺寸控件没有可见代理时本来也没法用。 -->
+      <h2>十六、display:none 的原生 select（零尺寸，只能靠祖先盒定位）</h2>
+      <div class="z18">
+        <div><span style="color:red;">*</span>民族</div>
+        <div class="z18wrap">
+          <select id="nation" name="nation" style="display:none">
+            <option value="">请选择</option>
+            <option value="01">汉族</option>
+          </select>
+          <div class="z18view">请选择</div>
+        </div>
+      </div>
+
+      <!-- 省市联动三联（真实简历里非常常见）：三个下拉都在显示自己的占位文字，
+           每个占位文字离邻居都比邻居自己的真标签更近。若不排除"下拉框正在显示的值"，
+           三个字段会互相冒充标签，谁也叫不出自己是"籍贯"。
+           布局全部写成内联样式：改版测试会重命名所有 class，用 class 定布局的话
+           "改版"会顺带把版面改掉，那测的就不是采集器了。 -->
+      <div>
+        <div>籍贯</div>
+        <div style="display: flex; gap: 14px">
+          <div style="display: inline-block">
+            <select id="prov" name="prov" style="display: none">
+              <option value="">请选择</option>
+              <option value="11">北京市</option>
+              <option value="31">上海市</option>
+            </select>
+            <span style="display: inline-block; min-width: 92px; padding: 4px 8px; border: 1px solid #bbb">请选择</span>
+          </div>
+          <div style="display: inline-block">
+            <select id="city" name="city" style="display: none">
+              <option value="00">请选择市</option>
+            </select>
+            <span style="display: inline-block; min-width: 92px; padding: 4px 8px; border: 1px solid #bbb">请选择市</span>
+          </div>
+          <div style="display: inline-block">
+            <select id="dist" name="dist" style="display: none">
+              <option value="00">请选择区/县</option>
+            </select>
+            <span style="display: inline-block; min-width: 92px; padding: 4px 8px; border: 1px solid #bbb">请选择区/县</span>
+          </div>
+        </div>
+      </div>
 
       <input type="hidden" name="csrfToken" value="should-be-filtered" />
     </form>

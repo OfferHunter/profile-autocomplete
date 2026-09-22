@@ -132,6 +132,24 @@ try {
   const school = byNear('毕业院校');
   check('sectionTitle 命中前置标题', !!school && !!school.sectionTitle, school ? `sectionTitle=${school.sectionTitle}` : 'n/a');
 
+  // 真实站点（牛客）的区块标题是 <span class="section-header__title">基本信息</span>，
+  // 18px/600，没有任何语义标签。只认 h1-h6/[role=heading]/legend 是抓不到的。
+  const styled = main.find((f) => f.labelForText === '成员姓名');
+  check(
+    '样式化 span 标题能被当作区块（无 h1-h6 / role=heading）',
+    !!styled && styled.sectionTitle === '家庭成员情况',
+    styled ? `sectionTitle=${styled.sectionTitle}` : '未找到「成员姓名」'
+  );
+
+  // 牛客的「基本信息」区块高约 550px，字段离标题就是这个距离量级。
+  // 距离上限卡太小会让长区块里的字段集体丢掉区块归属。
+  const far = main.find((f) => f.labelForText === '证书名称');
+  check(
+    '标题离字段 620px 时仍能正确归属区块',
+    !!far && far.sectionTitle === '证书与荣誉',
+    far ? `sectionTitle=${far.sectionTitle}` : '未找到「证书名称」'
+  );
+
   console.log('\n【控件与选项】');
   const degree = main.find((f) => f.name === 'degree');
   check('原生 select 被采集', !!degree, '未找到 name=degree');
@@ -159,6 +177,67 @@ try {
   check('视口外的 file input 被保留', !!fileInput, '被误杀');
   check('视口外的 file input 被标记为 visuallyHidden', !!fileInput && fileInput.visuallyHidden === true, fileInput ? `visuallyHidden=${fileInput.visuallyHidden}` : 'n/a');
 
+  console.log('\n【bootstrap-select：隐身原生 select + 关闭的选择弹层】');
+  const nat = main.find((f) => f.name === 'nationality');
+  check(
+    'opacity:0 的原生 select 被保留（真身，与 type=file 同一类情形）',
+    !!nat,
+    '被当成"视觉隐藏且无标签"过滤掉了 → 该下拉框只剩弹层面板出现在结果里'
+  );
+  check('保留后仍如实标记 visuallyHidden', !!nat && nat.visuallyHidden === true, nat ? `${nat.visuallyHidden}` : 'n/a');
+  check(
+    '靠几何拿到上方标签「国籍/地区」',
+    !!nat && nearTexts(nat).some((t) => t.includes('国籍')),
+    nat ? JSON.stringify(nearTexts(nat).slice(0, 4)) : 'n/a'
+  );
+  check(
+    '真实 option value 仍完整',
+    !!nat && nat.options?.some((o) => o.value === '156' && o.label === '中国'),
+    nat ? JSON.stringify(nat.options) : 'n/a'
+  );
+  check(
+    '容器自身的占位文字（显示"请选择"的按钮）不冒充标签',
+    !!nat && ((nat.nearbyText || []).find((n) => n.pos === 'left' || n.pos === 'above') || {}).text?.includes('国籍'),
+    nat ? JSON.stringify(nat.nearbyText.slice(0, 3)) : 'n/a'
+  );
+  check(
+    '关闭的弹层面板（role=combobox）不被当作字段',
+    !main.some((f) => f.role === 'combobox' && f.visuallyHidden === true),
+    '弹层面板混进了结果，表现为"无法命名的 combobox"'
+  );
+  check('关闭的弹层面板（role=listbox）不被当作字段', !main.some((f) => f.role === 'listbox'), '弹层里的 listbox 混进了结果');
+  check('弹层内的搜索框不被当作字段', !main.some((f) => f.ariaLabel === 'Search'), '弹层搜索框混进了结果');
+
+  console.log('\n【零尺寸控件：邻域不能锚在文档原点】');
+  const nation = main.find((f) => f.name === 'nation');
+  check('display:none 的原生 select 被保留', !!nation, '未找到 name=nation');
+  check(
+    '能采到上方的标签文字（而不是文档左上角的内容）',
+    !!nation && nearTexts(nation).some((t) => t.includes('民族')),
+    nation ? JSON.stringify(nearTexts(nation).slice(0, 4)) : 'n/a'
+  );
+  check(
+    '首选标签就是那个真标签，不是容器自身的文字',
+    !!nation && ((nation.nearbyText || []).find((n) => n.pos === 'left' || n.pos === 'above') || {}).text?.includes('民族'),
+    nation ? JSON.stringify(nation.nearbyText.slice(0, 3)) : 'n/a'
+  );
+
+  console.log('\n【联动三联下拉：邻居显示的占位文字不能冒充标签】');
+  {
+    const trio = ['prov', 'city', 'dist'].map((n) => main.find((f) => f.name === n));
+    check('三联下拉三个都被采集', trio.every(Boolean), `实际 ${trio.filter(Boolean).length} 个`);
+    check(
+      '三个的标签都是真标签「籍贯」，不是邻居的占位文字',
+      trio.every((f) => f && labelOf(f) === '籍贯'),
+      trio.map((f) => (f ? labelOf(f) : '未找到')).join(' / ')
+    );
+    check(
+      '真标签「籍贯」确实在邻域里（而不是靠 name 兜底）',
+      trio.every((f) => f && nearTexts(f).includes('籍贯')),
+      trio.map((f) => (f ? JSON.stringify(nearTexts(f).slice(0, 3)) : 'n/a')).join(' | ')
+    );
+  }
+
   console.log('\n【幂等 ID：动态插入不漂移】');
   const before = main.find((f) => f.labelForText === '原有字段');
   check('插入前存在「原有字段」', !!before, '未找到');
@@ -171,6 +250,23 @@ try {
     check('插入两个新字段后，原字段 id 不变', !!same && same.id === before.id, `before=${before.id} after=${same && same.id}`);
     check('新插入的字段被采集到', after.some((f) => f.labelForText === '动态字段1') && after.some((f) => f.labelForText === '动态字段2'), '未采集到动态字段');
     check('采集数量随插入增加', after.length >= main.length + 2, `${main.length} → ${after.length}`);
+  }
+
+  console.log('\n【滚动不丢字段：getBoundingClientRect 是视口相对坐标】');
+  {
+    const beforeScroll = await page.evaluate(() => window.__PA.collector.collect());
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await new Promise((r) => setTimeout(r, 200));
+    const atBottom = await page.evaluate(() => window.__PA.collector.collect());
+    check(
+      '滚到页面底部后字段数不变',
+      atBottom.length === beforeScroll.length,
+      `${beforeScroll.length} → ${atBottom.length}（丢掉的是被误判为"视口外隐藏"的字段）`
+    );
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await new Promise((r) => setTimeout(r, 200));
+    const backTop = await page.evaluate(() => window.__PA.collector.collect());
+    check('滚回顶部后字段数不变', backTop.length === beforeScroll.length, `${backTop.length}`);
   }
 
   console.log('\n【多 frame 汇总】');
