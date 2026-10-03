@@ -12,7 +12,7 @@
  */
 
 import { mkdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
@@ -137,6 +137,7 @@ interface SessionState {
 /** Options resolved once by the plugin and shared by every tool. */
 export interface ToolsOptions {
   bridge: Bridge
+  /** Snapshot root, relative to the session working directory. */
   runDir: string
 }
 
@@ -190,6 +191,9 @@ function jsonWithImage(visible: unknown, image: ImageValue | undefined): Content
  */
 export function registerTools(ctx: Context, options: ToolsOptions): void {
   const { bridge, runDir } = options
+  // The frame index must hand the model absolute paths, so anchor the relative
+  // run dir to the session working directory once here.
+  const snapshotRoot = resolve(runDir)
   const sessions = new Map<string, SessionState>()
 
   const stateOf = (exec: ToolExecution): SessionState => {
@@ -394,7 +398,7 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
       }, exec.signal, requestedTimeout(args)) as ObserveResult
       state.snapshotId = observation.snapshot
 
-      const dir = join(runDir, sessionKey(exec), observation.snapshot)
+      const dir = join(snapshotRoot, sessionKey(exec), observation.snapshot)
       await mkdir(dir, { recursive: true })
       const frames: FrameIndex[] = []
       for (const frame of observation.frames) {

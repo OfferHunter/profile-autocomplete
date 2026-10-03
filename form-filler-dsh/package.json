@@ -11,25 +11,15 @@
     "directory": "form-filler-dsh"
   },
   "type": "module",
-  "main": "lib/index.js",
-  "types": "lib/types/index.d.ts",
   "exports": {
-    ".": {
-      "types": "./lib/types/index.d.ts",
-      "default": "./lib/index.js"
-    },
+    ".": "./src/index.ts",
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
-  "files": [
-    "lib/index.js",
-    "lib/types/**/*.d.ts"
-  ],
   "license": "MIT",
   "peerDependencies": {
     "@deepseek-ai/cordis": "workspace:^",
     "@deepseek-ai/dsh-attachment": "workspace:^",
-    "@deepseek-ai/dsh-home-paths": "workspace:^",
     "@deepseek-ai/dsh-llm": "workspace:^",
     "@deepseek-ai/dsh-system-prompt": "workspace:^",
     "@deepseek-ai/dsh-tools": "workspace:^",
@@ -44,7 +34,6 @@
     "@deepseek-ai/cordis-plugin-include": "workspace:^",
     "@deepseek-ai/cordis-plugin-loader": "workspace:^",
     "@deepseek-ai/dsh-attachment": "workspace:^",
-    "@deepseek-ai/dsh-home-paths": "workspace:^",
     "@deepseek-ai/dsh-llm": "workspace:^",
     "@deepseek-ai/dsh-system-prompt": "workspace:^",
     "@deepseek-ai/dsh-tools": "workspace:^",

@@ -42,11 +42,11 @@ kind: "package-reference"
 |---|---|---|
 | `host` | `127.0.0.1` | 回环监听地址 |
 | `port` | `8765` | 回环监听端口；`0` 表示由系统分配 |
-| `runDir` | `$DSH_HOME/form-filler/runs` | 存放每次观察所得 DOM 快照的目录 |
+| `runDir` | `runs` | 存放每次观察所得 DOM 快照的目录，相对会话工作目录 |
 | `knowledgeDir` | `knowledge` | 用户自己的 `*.md` 资料目录，相对会话工作目录 |
 | `attachmentsDir` | `attachments` | 证书、照片等待上传文件，相对会话工作目录 |
 
-`knowledgeDir` 与 `attachmentsDir` 刻意写成相对路径：它们相对会话的工作目录解析，而该目录也正是文件沙箱的可写根。把一个会话指向自带的 `knowledge/` 与 `attachments/` 的工作目录（每个简历版本或每个人一份），资料就跟着这个工作目录走。
+`runDir`、`knowledgeDir` 与 `attachmentsDir` 刻意写成相对路径：它们相对会话的工作目录解析，而该目录也正是文件沙箱的可写根。把一个会话指向自带的 `knowledge/` 与 `attachments/` 的工作目录（每个简历版本或每个人一份），资料与 DOM 快照就跟着这个工作目录走。
 
 激活时会打印实际的监听地址，扩展会自动连接它。
 

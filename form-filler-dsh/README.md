@@ -42,11 +42,11 @@ Mount this plugin in a profile, then install the Profile Autocomplete extension 
 |---|---|---|
 | `host` | `127.0.0.1` | Loopback listen host |
 | `port` | `8765` | Loopback listen port; `0` requests an OS-assigned port |
-| `runDir` | `$DSH_HOME/form-filler/runs` | Directory receiving per-observation DOM snapshots |
+| `runDir` | `runs` | Directory receiving per-observation DOM snapshots, relative to the session working directory |
 | `knowledgeDir` | `knowledge` | User's `*.md` profile files, relative to the session working directory |
 | `attachmentsDir` | `attachments` | Certificates, photos, and other uploadable files, relative to the session working directory |
 
-`knowledgeDir` and `attachmentsDir` are relative on purpose: they resolve under the session's working directory, which is also the file sandbox's writable root. Point a session at a workspace holding its own `knowledge/` and `attachments/` — one per résumé version or person — and the profile follows that workspace.
+`runDir`, `knowledgeDir`, and `attachmentsDir` are relative on purpose: they resolve under the session's working directory, which is also the file sandbox's writable root. Point a session at a workspace holding its own `knowledge/` and `attachments/` — one per résumé version or person — and the profile and DOM snapshots follow that workspace.
 
 The resolved listen address is logged at activation; the extension dials it automatically.
 

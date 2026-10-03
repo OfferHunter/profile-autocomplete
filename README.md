@@ -56,7 +56,7 @@ form-filler-chrome/        浏览器扩展（感知与操作）
     sidepanel.html/.css/.js 侧边栏：连接设置、状态、标签页列表
     connection.js          面板 ↔ 后台的端口通道
     diagnostics.js         清单版本自检
-form-filler-dsh/           DSH 插件（模型、知识库、任务编排），软链接挂回 deepseek-harness
+form-filler-dsh/           DSH 插件（模型、知识库、任务编排），经 --patch 绝对路径加载，不再挂回 deepseek-harness
 ```
 
 ## 边界

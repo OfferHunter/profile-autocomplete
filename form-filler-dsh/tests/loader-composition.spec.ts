@@ -237,19 +237,13 @@ describe('form-filler real Loader composition through cordis.yml', () => {
     await extension.close()
   })
 
-  it('defaults runDir and knowledgeDir below DSH_HOME when config omits them', async () => {
-    root = await mkdtemp(join(tmpdir(), 'dsh-form-filler-home-'))
+  it('defaults the working-directory-relative dirs, contributing nothing when absent', async () => {
+    root = await mkdtemp(join(tmpdir(), 'dsh-form-filler-defaults-'))
     const port = await freePort()
-    const previousHome = process.env.DSH_HOME
-    process.env.DSH_HOME = root
-    try {
-      await boot({ port })
-      // A missing knowledge directory must yield an empty contribution, not a crash.
-      const assembly = await context!.systemPrompt.assemble()
-      expect(assembly.sections.find(section => section.name === 'form-filler:profile')?.text ?? '').toBe('')
-    } finally {
-      if (previousHome === undefined) delete process.env.DSH_HOME
-      else process.env.DSH_HOME = previousHome
-    }
+    await boot({ port })
+    // The default knowledge dir is cwd-relative and absent here, so the profile
+    // must contribute nothing rather than crash.
+    const assembly = await context!.systemPrompt.assemble()
+    expect(assembly.sections.find(section => section.name === 'form-filler:profile')?.text ?? '').toBe('')
   })
 })

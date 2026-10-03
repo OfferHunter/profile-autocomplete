@@ -12,7 +12,6 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import z from '@deepseek-ai/schemastery'
 import { Bridge } from './bridge.ts'
 import { registerPrompt } from './prompt.ts'
@@ -27,7 +26,11 @@ export interface Config {
   host?: string
   /** Loopback listen port; zero requests an OS-assigned port. @default 8765 */
   port?: number
-  /** Directory receiving per-observation DOM snapshots. Defaults below `$DSH_HOME`. */
+  /**
+   * Directory receiving per-observation DOM snapshots, resolved against the
+   * session working directory so the dumps stay with the workspace.
+   * @default 'runs'
+   */
   runDir?: string
   /**
    * Directory of the user's own `*.md` profile files, resolved against the
@@ -61,7 +64,7 @@ export interface ResolvedConfig {
 }
 
 /**
- * Apply the documented defaults to a partial config. The profile and
+ * Apply the documented defaults to a partial config. The snapshot, profile, and
  * attachment directories stay relative so they resolve under whatever session
  * working directory (the sandbox's writable root) the harness sets.
  * @param config - the partial plugin config.
@@ -71,7 +74,7 @@ export function resolveConfig(config: Config): ResolvedConfig {
   return {
     host: config.host ?? '127.0.0.1',
     port: config.port ?? 8765,
-    runDir: config.runDir ?? dshHomePath('form-filler', 'runs'),
+    runDir: config.runDir ?? 'runs',
     knowledgeDir: config.knowledgeDir ?? 'knowledge',
     attachmentsDir: config.attachmentsDir ?? 'attachments',
   }
