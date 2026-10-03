@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>Profile Autocomplete</title><link rel="stylesheet" href="sidepanel.css"></head>
+<body>
+<header><h1>Profile Autocomplete</h1><p id="version" class="hint"></p><p id="site">读取标签页…</p></header>
+<section><div id="status">连接本地服务…</div>
+<p class="hint">任务在 DSH 中发起：在对话里让助手填写当前页面即可。关闭此面板不影响执行。</p></section>
+<section><h2>可操作的标签页</h2><ul id="tabs" class="tabs"><li class="hint">暂无</li></ul></section>
+<details open><summary>连接设置</summary><label>本地服务<input id="url" value="http://127.0.0.1:8765"></label>
+<button id="connect">保存并连接</button><p class="hint">地址保存在扩展本机存储，默认 127.0.0.1:8765。模型与资料都在 DSH 侧配置。</p></details>
+<p id="message" role="status"></p>
+<script type="module" src="sidepanel.js"></script>
+</body></html>

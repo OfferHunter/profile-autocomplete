@@ -1,0 +1,7 @@
+body { font:14px/1.6 system-ui,sans-serif; margin:16px; color:#dce5ee; background:#111820; }
+h1 {font-size:19px} h2 {font-size:15px} p {overflow-wrap:anywhere}
+section, details {border:1px solid #354353; border-radius:9px; padding:12px; margin:12px 0;}
+button {background:#2a4057; color:white; border:1px solid #51677b; border-radius:5px; padding:7px 12px; cursor:pointer;}
+button:disabled {opacity:.5;cursor:default} .buttons {display:flex;gap:7px;flex-wrap:wrap}
+label {display:block;margin:10px 0} input {display:block;box-sizing:border-box;width:100%;padding:8px;background:#17232f;color:white;border:1px solid #51677b;border-radius:4px}
+.hint {font-size:12px;color:#a5b6c7} #message {color:#ffcf85} summary {cursor:pointer} .tabs {list-style:none;padding:0;margin:0} .tabs li {overflow-wrap:anywhere;border-top:1px solid #354353;padding:6px 0}

@@ -1,0 +1,10 @@
+{
+  "name": "profile-autocomplete",
+  "version": "0.2.1",
+  "private": true,
+  "type": "module",
+  "description": "浏览器扩展：网页感知与操作，由 DSH form-filler 插件通过本地 WebSocket 驱动。",
+  "scripts": {
+    "test": "node tests/bridge-message.mjs"
+  }
+}
