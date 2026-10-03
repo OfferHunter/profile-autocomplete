@@ -1,0 +1,25 @@
+# Source overlay for the experimental form-filler plugin:
+#   pnpm dsh <profile> --patch ./packages/experimental/form-filler-dsh/cordis.patch.yml
+# The relative entry is anchored to this file and runs through the CLI's tsx
+# loader, so no build and no profile install are needed.
+#
+# Optional config (defaults shown):
+#   host: 127.0.0.1
+#   port: 8765            # the extension connects here
+#   runDir: $DSH_HOME/form-filler/runs
+#   knowledgeDir: knowledge       # relative to the session working directory
+#   attachmentsDir: attachments   # relative to the session working directory
+#
+# Both directories are relative: they resolve under the session working
+# directory, which is also the file sandbox's workspace-write boundary. Point
+# the session at a workspace holding knowledge/ and attachments/ (one per
+# résumé version or person) and the model reads the profile, uploads from the
+# attachment set, and persists learned facts with its own write / edit tools.
+
+- insert:
+    - id: form-filler
+      name: './src/index.ts'
+      config:
+        port: 8765
+        knowledgeDir: knowledge
+        attachmentsDir: attachments

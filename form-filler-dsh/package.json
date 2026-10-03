@@ -7,8 +7,8 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/deepseek-ai/deepseek-harness.git",
-    "directory": "packages/experimental/form-filler"
+    "url": "git+https://github.com/OfferHunter/profile-autocomplete.git",
+    "directory": "form-filler-dsh"
   },
   "type": "module",
   "main": "lib/index.js",

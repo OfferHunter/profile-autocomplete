@@ -6,7 +6,7 @@
 
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { registerPrompt } from '../src/prompt.ts'
@@ -18,15 +18,19 @@ afterEach(async () => {
   root = undefined
 })
 
-/** Capture the sections the plugin registers and return the profile provider. */
-function profileProvider(knowledgeDir: string): () => string {
+/**
+ * Capture the sections the plugin registers and return the profile provider.
+ * The attachment directory defaults to a sibling that does not exist, so the
+ * profile-only cases stay focused.
+ */
+function profileProvider(knowledgeDir: string, attachmentsDir = join(knowledgeDir, 'attachments')): () => string {
   const sections: Array<{ name: string; text: string | (() => string) }> = []
   const ctx = {
     systemPrompt: {
       section: (section: { name: string; text: string | (() => string) }) => { sections.push(section) },
     },
   } as unknown as Context
-  registerPrompt(ctx, { knowledgeDir })
+  registerPrompt(ctx, { knowledgeDir, attachmentsDir })
   return sections.find(section => section.name === 'form-filler:profile')!.text as () => string
 }
 
@@ -56,6 +60,24 @@ describe('readProfile', () => {
     expect(text).toContain('# 文件：a.md')
     expect(text).toContain('姓名：张三')
     expect(text).not.toContain('broken.md')
+  })
+
+  it('names both directories and lists attachment files by absolute path', async () => {
+    const dir = await tempDir()
+    await writeFile(join(dir, 'a.md'), '姓名：张三\n')
+    const attachments = join(dir, 'files')
+    await mkdir(attachments)
+    await writeFile(join(attachments, '证书.pdf'), 'x')
+    await writeFile(join(attachments, '证件照.jpg'), 'x')
+    // A subdirectory is not an uploadable file and must not be listed.
+    await mkdir(join(attachments, 'nested'))
+    const text = profileProvider(dir, attachments)()
+    expect(text).toContain(`资料目录（可写）：${resolve(dir)}`)
+    expect(text).toContain(`附件目录（只读）：${resolve(attachments)}`)
+    expect(text).toContain('# 可用附件（上传时用这些绝对路径）')
+    expect(text).toContain(`- ${join(resolve(attachments), '证书.pdf')}`)
+    expect(text).toContain(`- ${join(resolve(attachments), '证件照.jpg')}`)
+    expect(text).not.toContain('nested')
   })
 
   it('truncates a profile beyond the character limit with a visible warning', async () => {

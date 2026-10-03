@@ -21,13 +21,14 @@ afterEach(() => {
 })
 
 describe('resolveConfig', () => {
-  it('defaults host, port, and the two paths below DSH_HOME', () => {
+  it('defaults host, port, a DSH_HOME run dir, and cwd-relative profile dirs', () => {
     const home = resolve(process.env.DSH_HOME!)
     expect(resolveConfig({})).toEqual({
       host: '127.0.0.1',
       port: 8765,
       runDir: join(home, 'form-filler', 'runs'),
-      knowledgeDir: join(home, 'form-filler', 'knowledge'),
+      knowledgeDir: 'knowledge',
+      attachmentsDir: 'attachments',
     })
   })
 
@@ -37,11 +38,13 @@ describe('resolveConfig', () => {
       port: 9123,
       runDir: 'C:/runs',
       knowledgeDir: 'C:/knowledge',
+      attachmentsDir: 'C:/attachments',
     })).toEqual({
       host: '0.0.0.0',
       port: 9123,
       runDir: 'C:/runs',
       knowledgeDir: 'C:/knowledge',
+      attachmentsDir: 'C:/attachments',
     })
   })
 })

@@ -11,7 +11,7 @@ DSH form-filler 插件 ── WebSocket ── 扩展后台 ── content scrip
 ## 加载扩展
 
 1. 在 Edge/Chrome 打开 `chrome://extensions`（Edge 为 `edge://extensions`），打开“开发者模式”。
-2. 点“加载已解压的扩展程序”，选择**本项目根目录**（含 `manifest.json` 的目录，即仓库根）。
+2. 点“加载已解压的扩展程序”，选择 **`form-filler-chrome/`** 目录（含 `manifest.json`）。
 3. 扩展更新后，在扩展管理页对该扩展点“重新加载”，并刷新要填写的网页。
 
 ## 连接 DSH
@@ -29,7 +29,7 @@ DSH form-filler 插件 ── WebSocket ── 扩展后台 ── content scrip
 
 ## 桥接协议
 
-扩展后台 `src/background/bridge.js` 与 `form-filler/src/bridge.ts` 一一对应：
+扩展后台 `src/background/bridge.js` 与 `form-filler-dsh/src/bridge.ts` 一一对应：
 
 | 方向 | 消息 |
 | --- | --- |
@@ -42,19 +42,21 @@ DSH form-filler 插件 ── WebSocket ── 扩展后台 ── content scrip
 ## 结构
 
 ```text
-manifest.json              扩展清单（入口即仓库根目录）
-src/background/
-  service-worker.js        MV3 service worker，装载桥接
-  bridge.js                WebSocket 桥接与 command 分发
-  cdp.js                   chrome.debugger：截图、真实输入、文件上传
-src/content/
-  dom.js                   页面快照（生成带 data-pa-n 地址的 HTML）
-  act.js                   在页面上下文执行 read/fill/click/...
-  main.js                  content script 入口，串起 dom/act
-src/sidepanel/
-  sidepanel.html/.css/.js  侧边栏：连接设置、状态、标签页列表
-  connection.js            面板 ↔ 后台的端口通道
-  diagnostics.js           清单版本自检
+form-filler-chrome/        浏览器扩展（感知与操作）
+  manifest.json            扩展清单（加载该目录）
+  src/background/
+    service-worker.js      MV3 service worker，装载桥接
+    bridge.js              WebSocket 桥接与 command 分发
+    cdp.js                 chrome.debugger：截图、真实输入、文件上传
+  src/content/
+    dom.js                 页面快照（生成带 data-pa-n 地址的 HTML）
+    act.js                 在页面上下文执行 read/fill/click/...
+    main.js                content script 入口，串起 dom/act
+  src/sidepanel/
+    sidepanel.html/.css/.js 侧边栏：连接设置、状态、标签页列表
+    connection.js          面板 ↔ 后台的端口通道
+    diagnostics.js         清单版本自检
+form-filler-dsh/           DSH 插件（模型、知识库、任务编排），软链接挂回 deepseek-harness
 ```
 
 ## 边界

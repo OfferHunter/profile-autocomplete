@@ -29,8 +29,17 @@ export interface Config {
   port?: number
   /** Directory receiving per-observation DOM snapshots. Defaults below `$DSH_HOME`. */
   runDir?: string
-  /** Directory of the user's own `*.md` profile files. Defaults below `$DSH_HOME`. */
+  /**
+   * Directory of the user's own `*.md` profile files, resolved against the
+   * session working directory so each workspace carries its own profile.
+   * @default 'knowledge'
+   */
   knowledgeDir?: string
+  /**
+   * Directory of certificates, photos, and other files to upload, resolved
+   * against the session working directory. @default 'attachments'
+   */
+  attachmentsDir?: string
 }
 
 /** Schemastery config for the form-filling plugin. */
@@ -39,6 +48,7 @@ export const Config: z<Config> = z.object({
   port: z.number().min(0).step(1).default(8765),
   runDir: z.string(),
   knowledgeDir: z.string(),
+  attachmentsDir: z.string(),
 })
 
 /** Concrete config after defaults are applied. */
@@ -47,10 +57,13 @@ export interface ResolvedConfig {
   port: number
   runDir: string
   knowledgeDir: string
+  attachmentsDir: string
 }
 
 /**
- * Apply the documented defaults to a partial config.
+ * Apply the documented defaults to a partial config. The profile and
+ * attachment directories stay relative so they resolve under whatever session
+ * working directory (the sandbox's writable root) the harness sets.
  * @param config - the partial plugin config.
  * @returns the config with every field resolved.
  */
@@ -59,7 +72,8 @@ export function resolveConfig(config: Config): ResolvedConfig {
     host: config.host ?? '127.0.0.1',
     port: config.port ?? 8765,
     runDir: config.runDir ?? dshHomePath('form-filler', 'runs'),
-    knowledgeDir: config.knowledgeDir ?? dshHomePath('form-filler', 'knowledge'),
+    knowledgeDir: config.knowledgeDir ?? 'knowledge',
+    attachmentsDir: config.attachmentsDir ?? 'attachments',
   }
 }
 
@@ -71,5 +85,5 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   ctx.logger.info(`form-filler: bridge listening on ${resolved.host}:${bridge.port}`)
 
   registerTools(ctx, { bridge, runDir: resolved.runDir })
-  registerPrompt(ctx, { knowledgeDir: resolved.knowledgeDir })
+  registerPrompt(ctx, { knowledgeDir: resolved.knowledgeDir, attachmentsDir: resolved.attachmentsDir })
 }
