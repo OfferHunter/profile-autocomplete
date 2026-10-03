@@ -21,6 +21,15 @@ const TAB = { id: 7, url: 'https://jobs.example.com/apply', title: '在线申请
 const PNG = 'iVBORw0KGgo='
 const CLIP = { x: 0, y: 0, width: 800, height: 600 }
 
+const FRAME0 = {
+  frameId: 0, documentId: 'top-doc-1', frameUrl: TAB.url, title: TAB.title,
+  html: '<html><body><input id="name"></body></html>', nodes: 2, error: null,
+}
+const FRAME1 = {
+  frameId: 1, documentId: 'frame-doc-1', frameUrl: 'https://jobs.example.com/embed', title: '子框架',
+  html: '<html><body><input id="inner"></body></html>', nodes: 2, error: null,
+}
+
 let root: string | undefined
 let context: Context | undefined
 let bridge: Bridge | undefined
@@ -29,6 +38,7 @@ let callCounter = 0
 let stubName: string | undefined = 'stub.png'
 let observeImage = PNG
 let shotImage = PNG
+let observeFrames: unknown[] = [FRAME0]
 let actReply: { ok: true; result: unknown } | { ok: false; error: string } = { ok: true, result: { ok: true } }
 
 const observeResult = () => ({
@@ -36,13 +46,20 @@ const observeResult = () => ({
   title: TAB.title,
   document: 'top-doc-1',
   snapshot: 'snap-1',
-  frames: [{
-    frameId: 0, documentId: 'top-doc-1', frameUrl: TAB.url, title: TAB.title,
-    html: '<html><body><input id="name"></body></html>', nodes: 2, error: null,
-  }],
+  frames: observeFrames,
   image: observeImage,
   clip: CLIP,
   pageHeight: 1200,
+})
+
+/** The `scan` reply one frame returns: one control with a label-for candidate. */
+const scanResults = () => ({
+  ok: true, frameUrl: TAB.url, title: TAB.title, total: 1, offset: 0, count: 1,
+  controls: [{
+    n: 3, tag: 'input', type: 'text', value: '',
+    flags: { visible: true, disabled: false, readonly: false },
+    labels: [{ kind: 'label-for', text: '姓名' }],
+  }],
 })
 
 const shotResult = () => ({ image: shotImage, clip: CLIP, pageHeight: 1200 })
@@ -73,6 +90,7 @@ afterEach(async () => {
   stubName = 'stub.png'
   observeImage = PNG
   shotImage = PNG
+  observeFrames = [FRAME0]
   actReply = { ok: true, result: { ok: true } }
 })
 
@@ -101,7 +119,17 @@ async function boot(options: { attachments?: boolean; observeDelayMs?: number } 
           : new Promise<{ ok: true; result: unknown }>((resolve) => { setTimeout(() => { resolve(reply) }, delayMs) })
       }
       if (command.op === 'shot') return { ok: true, result: shotResult() }
-      if (command.op === 'act') return actReply
+      if (command.op === 'act') {
+        const call = (command as { call?: { op?: string; items?: Array<{ n: number; value: string }> } }).call
+        if (call?.op === 'scan') return { ok: true, result: scanResults() }
+        if (call?.op === 'fill_many') {
+          return {
+            ok: true,
+            result: { ok: true, results: (call.items ?? []).map(item => ({ n: item.n, ok: true, actual: { value: item.value } })) },
+          }
+        }
+        return actReply
+      }
       return { ok: false, error: `unexpected op ${command.op}` }
     },
   })
@@ -218,5 +246,52 @@ describe('form-filler tools with an attachment store', () => {
     actReply = { ok: true, result: { ok: true, dispatched: true, point: { x: 12, y: 34 } } }
     expect(value(await call('form_click', { n: 5, trusted: true }))).toMatchObject({ ok: true })
     expect(value(await call('form_hover', { n: 5, trusted: true }))).toMatchObject({ ok: true })
+  })
+
+  it('form_scan walks every observed frame and merges per-frame controls', async () => {
+    await boot()
+    await call('form_attach', { tabId: 7 })
+    observeFrames = [FRAME0, FRAME1]
+    await call('form_observe', {})
+
+    const scanned = value(await call('form_scan', {}))
+    const frames = scanned.frames as Array<{ frameId: number; controls: Array<Record<string, unknown>> }>
+    expect(frames.map(frame => frame.frameId)).toEqual([0, 1])
+    expect(frames[0].controls[0]).toMatchObject({ n: 3, tag: 'input' })
+    expect(frames[1].controls).toHaveLength(1)
+
+    // One scan command per frame.
+    const scans = extension!.commands.filter(
+      command => command.op === 'act' && (command as { call?: { op?: string } }).call?.op === 'scan',
+    )
+    expect(scans).toHaveLength(2)
+
+    // An explicit frame scans only that one.
+    const one = value(await call('form_scan', { frame: 1 }))
+    expect((one.frames as Array<{ frameId: number }>).map(frame => frame.frameId)).toEqual([1])
+  })
+
+  it('form_fill_batch groups by frame and returns per-item readbacks', async () => {
+    await boot()
+    await attachAndObserve()
+
+    const res = value(await call('form_fill_batch', {
+      items: [
+        { n: 1, value: '张三' },
+        { n: 2, value: 'true', frame: 1 },
+        { n: 3, value: '李四' },
+      ],
+    }))
+    const results = res.results as Array<Record<string, unknown>>
+    expect(results).toHaveLength(3)
+    expect(results.every(item => item.ok === true)).toBe(true)
+    // Grouped by first-seen frame: frame 0 keeps document order, then frame 1.
+    expect(results.map(item => [item.frame, item.n])).toEqual([[0, 1], [0, 3], [1, 2]])
+
+    // One command per frame, not per item.
+    const batched = extension!.commands.filter(
+      command => command.op === 'act' && (command as { call?: { op?: string } }).call?.op === 'fill_many',
+    )
+    expect(batched).toHaveLength(2)
   })
 })

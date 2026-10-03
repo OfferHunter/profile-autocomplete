@@ -200,6 +200,25 @@
     return { ...out, box: boxOf(el) };
   }
 
+  // 批量写入：一条命令在页面内连续写多个控件，省去逐字段的往返。
+  // 逐个复用 fill()，因此守卫（stale 地址、unsupported/disabled、already_filled、写后回读）
+  // 完全一致 —— 只是把每项的 box 丢掉保持精简，批量窗口不需要它。
+  function fillMany(items) {
+    const results = [];
+    for (const item of (Array.isArray(items) ? items : [])) {
+      let r;
+      try {
+        r = fill(item && item.n, item && item.value);
+      } catch (e) {
+        r = { ok: false, reason: 'exception', message: String((e && e.message) || e) };
+      }
+      const rest = { ...(r || { ok: false }) };
+      delete rest.box; // 批量窗口不需要逐项坐标
+      results.push({ n: item && item.n, ...rest });
+    }
+    return { ok: true, results };
+  }
+
   function click(n) {
     const r = resolve(n);
     if (r.error) return { ok: false, reason: 'stale_address', message: r.error };
@@ -312,6 +331,10 @@
     switch (call.op) {
       case 'fill':
         return fill(call.n, call.value);
+      case 'fill_many':
+        return fillMany(call.items);
+      case 'scan':
+        return PA.scan ? PA.scan.scan(call) : { ok: false, reason: 'scan_unavailable', message: 'scan.js 未加载' };
       case 'click':
         return click(call.n);
       case 'read':
@@ -333,5 +356,5 @@
     }
   }
 
-  PA.act = { dispatch, fill, click, read, box, readState, matchOption, stateValue };
+  PA.act = { dispatch, fill, fillMany, click, read, box, readState, matchOption, stateValue };
 })();

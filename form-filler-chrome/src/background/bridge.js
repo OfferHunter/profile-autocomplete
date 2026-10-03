@@ -79,7 +79,10 @@ async function capture(tab, view, topDocumentId) {
 
 // DOM 级就走 content script（在页面上下文里做，稳且少一层转义）。
 const DOM_OPS = new Set(['fill', 'click', 'read', 'box', 'focus', 'hover', 'scroll']);
-const ACT_OPS = new Set([...DOM_OPS, 'type', 'upload']);
+// scan / fill_many 也要在页面上下文里跑（活 DOM 的可见性与几何），且要整个 call 透传。
+const ACT_OPS = new Set([...DOM_OPS, 'type', 'upload', 'scan', 'fill_many']);
+// 这些动作不吃单个整数地址 n。
+const NO_ADDRESS_OPS = new Set(['type', 'scan', 'fill_many']);
 
 function domAct(tabId, frame, call) {
   return act(tabId, frame.frameId, frame.documentId, call);
@@ -137,6 +140,8 @@ async function runAct(tabId, frame, call) {
   if (call.op === 'hover' && call.trusted === true) return trustedPointer(tabId, frame, call.n, cdp.moveTo);
   if (call.op === 'type') return typeInto(tabId, frame, call);
   if (call.op === 'upload') return uploadFile(tabId, frame, call);
+  // scan / fill_many 原样把整个 call 交给对应 frame 的 content script。
+  if (call.op === 'scan' || call.op === 'fill_many') return domAct(tabId, frame, call);
   if (DOM_OPS.has(call.op)) return domAct(tabId, frame, { op: call.op, n: call.n, value: call.value, y: call.y });
   return { ok: false, reason: 'unknown_op', message: `不认识的动作 ${call.op}` };
 }
@@ -169,7 +174,7 @@ async function command(msg) {
     const call = msg.call;
     // 只认白名单动作，绝不接受 force 或页面/模型给的任意代码。
     if (!call || !ACT_OPS.has(call.op)) return { ok: false, reason: 'unknown_op', message: '不支持的动作' };
-    if (call.op !== 'type' && !Number.isInteger(call.n)) {
+    if (!NO_ADDRESS_OPS.has(call.op) && !Number.isInteger(call.n)) {
       return { ok: false, reason: 'bad_call', message: '这个动作需要一个整数地址 n' };
     }
     return runAct(tab.id, frame, call);

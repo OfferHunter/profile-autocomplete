@@ -13,7 +13,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["src/content/dom.js", "src/content/act.js", "src/content/main.js"],
+      "js": ["src/content/dom.js", "src/content/scan.js", "src/content/act.js", "src/content/main.js"],
       "run_at": "document_idle",
       "all_frames": true,
       "match_about_blank": true

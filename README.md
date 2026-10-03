@@ -35,7 +35,7 @@ DSH form-filler 插件 ── WebSocket ── 扩展后台 ── content scrip
 | --- | --- |
 | 扩展 → DSH | `hello { browser }`（连接后）；`tabs { tabs: [{id,url,title}] }`（连接建立后与心跳时）；`result { id, ok, result \| error }`；`ping` |
 | DSH → 扩展 | `ready`（握手通过）；`cancel { id }`；`command { id, op, ... }`；`pong` |
-| `command.op` | `observe`（DOM + 截图 + 分帧）、`shot`（重截图）、`act`（`read/fill/click/type/hover/scroll/upload`） |
+| `command.op` | `observe`（DOM + 截图 + 分帧）、`shot`（重截图）、`act`（`read/fill/fill_many/scan/click/type/hover/scroll/upload`） |
 
 身份非法（首帧不是 `hello`、身份为空/过长/重复）时 DSH 会以 `1008` 关闭连接。
 
@@ -50,8 +50,9 @@ form-filler-chrome/        浏览器扩展（感知与操作）
     cdp.js                 chrome.debugger：截图、真实输入、文件上传
   src/content/
     dom.js                 页面快照（生成带 data-pa-n 地址的 HTML）
-    act.js                 在页面上下文执行 read/fill/click/...
-    main.js                content script 入口，串起 dom/act
+    scan.js                枚举可填控件与多来源候选标签（只读，不筛选）
+    act.js                 在页面上下文执行 read/fill/fill_many/click/...
+    main.js                content script 入口，串起 dom/scan/act
   src/sidepanel/
     sidepanel.html/.css/.js 侧边栏：连接设置、状态、标签页列表
     connection.js          面板 ↔ 后台的端口通道

@@ -1,8 +1,8 @@
 /**
  * The model-facing form-filling tool set: perception primitives (`form_tabs`,
- * `form_attach`, `form_observe`, `form_look`, `form_read`) plus action
- * primitives (`form_fill`, `form_click`, `form_type`, `form_hover`,
- * `form_scroll`, `form_wait`, `form_upload`).
+ * `form_attach`, `form_observe`, `form_look`, `form_read`, `form_scan`) plus
+ * action primitives (`form_fill`, `form_fill_batch`, `form_click`, `form_type`,
+ * `form_hover`, `form_scroll`, `form_wait`, `form_upload`).
  *
  * Every primitive is deliberately free of local judgement: nothing here decides
  * what counts as a field or whether a control "should" be filled. The snapshot
@@ -131,6 +131,8 @@ interface SessionState {
   browser?: string
   tabId?: number
   snapshotId?: string | undefined
+  /** The frames of the latest observation, so `form_scan` can walk them. */
+  frames?: FrameIndex[]
   attempts: Map<string, number>
 }
 
@@ -152,6 +154,34 @@ interface ActCall {
   text?: string | undefined
   key?: string | undefined
   trusted?: boolean | undefined
+  // `scan` parameters.
+  kinds?: string[] | undefined
+  maxGapPx?: number | undefined
+  maxCandidates?: number | undefined
+  scope?: string | undefined
+  offset?: number | undefined
+  limit?: number | undefined
+  // `fill_many` payload.
+  items?: Array<{ n: number; value: string }> | undefined
+}
+
+/** One control reported by `form_scan` (label kinds are open-ended). */
+interface ScannedControl {
+  n: number
+  tag: string
+  labels: Array<{ kind: string; text: string }>
+  [key: string]: unknown
+}
+
+/** The extension's reply to a `scan` command. */
+interface ScanResult {
+  frameUrl?: string
+  title?: string
+  total?: number
+  offset?: number
+  count?: number
+  controls?: ScannedControl[]
+  scopeError?: string
 }
 
 /** The session identity used to key bindings; falls back when no agent is attached. */
@@ -414,6 +444,7 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
         })
       }
       const image = await saveImage(observation.image, 'page.png')
+      state.frames = frames
       return {
         url: observation.url,
         title: observation.title,
@@ -639,6 +670,161 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
     },
     async execute(args, exec) {
       return act(exec, { op: 'upload', n: args.n, path: args.path, frame: args.frame ?? 0 }, requestedTimeout(args))
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'form_scan',
+    description: 'Enumerate every fillable control on the bound tab — inputs, textareas, selects, contenteditable, '
+      + 'and ARIA combobox/listbox/radio/checkbox/switch/textbox/spinbutton — with each control\'s address n, its current '
+      + 'state, flags (visible/disabled/readonly), and a set of candidate label texts. Nothing is filtered locally: hidden, '
+      + 'file, button, and disabled controls are all listed with flags, so you decide what matters. Each label carries a '
+      + '`kind` (label-for, wrapping, aria, dl, legend, table-cell, prev-text, placeholder, title, row-left, above) — you '
+      + 'judge which one is the field\'s key. Read it to build the field→value map for form_fill_batch. Requires a prior form_observe.',
+    parameters: {
+      frame: { type: 'integer', description: 'Frame id to scan. Omit to scan every frame of the latest observation.' },
+      kinds: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Label strategies to keep: label-for, wrapping, aria, dl, legend, table-cell, prev-text, placeholder, title, row-left, above. Defaults to all.',
+      },
+      maxGapPx: { type: 'integer', description: 'Search radius in px for the spatial row-left/above candidates. Defaults to 160.' },
+      maxCandidates: { type: 'integer', description: 'Max label candidates per control. Defaults to 6.' },
+      scope: { type: 'string', description: 'Optional CSS selector limiting the scan to a subtree.' },
+      offset: { type: 'integer', description: 'Skip this many controls (pagination).' },
+      limit: { type: 'integer', description: 'Max controls to return. Defaults to 200.' },
+      ...TIMEOUT_PARAM,
+    },
+    output: {
+      schema: {
+        type: 'object', additionalProperties: false,
+        properties: {
+          frames: {
+            type: 'array', required: true,
+            items: {
+              type: 'object', additionalProperties: false,
+              properties: {
+                frameId: { type: 'integer', required: true },
+                frameUrl: { type: 'string' },
+                title: { type: 'string' },
+                total: { type: 'integer' },
+                offset: { type: 'integer' },
+                count: { type: 'integer' },
+                scopeError: { type: 'string' },
+                controls: {
+                  type: 'array', required: true,
+                  items: {
+                    type: 'object', additionalProperties: true,
+                    properties: {
+                      n: { type: 'integer', required: true },
+                      tag: { type: 'string', required: true },
+                      labels: {
+                        type: 'array', required: true,
+                        items: {
+                          type: 'object', additionalProperties: false,
+                          properties: {
+                            kind: { type: 'string', required: true },
+                            text: { type: 'string', required: true },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      render: (_args, value) => json(value),
+    },
+    async execute(args, exec) {
+      const { state } = targetOf(exec)
+      const known = state.frames ?? []
+      const requested = args.frame !== undefined ? [args.frame] : known.map(f => f.frameId)
+      const targets = requested.length > 0 ? requested : [0]
+      const frames: Array<Record<string, unknown>> = []
+      for (const frameId of targets) {
+        const scanned = await act(exec, {
+          op: 'scan', frame: frameId,
+          kinds: args.kinds, maxGapPx: args.maxGapPx, maxCandidates: args.maxCandidates,
+          scope: args.scope, offset: args.offset, limit: args.limit,
+        }, requestedTimeout(args)) as ScanResult
+        const info = known.find(f => f.frameId === frameId)
+        const controls = scanned.controls ?? []
+        frames.push({
+          frameId,
+          frameUrl: scanned.frameUrl ?? info?.frameUrl ?? '',
+          title: scanned.title ?? info?.title ?? '',
+          total: scanned.total ?? controls.length,
+          offset: scanned.offset ?? 0,
+          count: scanned.count ?? controls.length,
+          controls,
+          ...scanned.scopeError === undefined ? {} : { scopeError: scanned.scopeError },
+        })
+      }
+      return { frames }
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'form_fill_batch',
+    description: 'Write many values in one round trip: applies each {n, value} on the bound tab in page order and returns a '
+      + 'per-item readback. Value semantics match form_fill ("true"/"false" for a checkbox/radio; option label or value for a '
+      + 'native select). Items whose control already holds a valid value are skipped (no override); controls form_fill cannot '
+      + 'write — custom widgets, disabled, hidden — are rejected with a reason, so fill those with form_click / form_type. '
+      + 'No confirmation screenshots are taken; form_observe afterward to verify.',
+    parameters: {
+      items: {
+        type: 'array', required: true,
+        description: 'Writes to apply, in order.',
+        items: {
+          type: 'object', additionalProperties: false,
+          properties: {
+            n: { type: 'integer', required: true, description: 'Element address from the snapshot.' },
+            value: { type: 'string', required: true, description: 'Value to write; "true"/"false" for checkbox/radio.' },
+            frame: { type: 'integer', description: 'Frame id. Defaults to 0.' },
+          },
+        },
+      },
+      ...TIMEOUT_PARAM,
+    },
+    output: {
+      schema: {
+        type: 'object', additionalProperties: false,
+        properties: {
+          results: {
+            type: 'array', required: true,
+            items: {
+              type: 'object', additionalProperties: true,
+              properties: {
+                frame: { type: 'integer', required: true },
+                n: { type: 'integer', required: true },
+                ok: { type: 'boolean', required: true },
+                reason: { type: 'string' },
+              },
+            },
+          },
+        },
+      },
+      render: (_args, value) => json(value),
+    },
+    async execute(args, exec) {
+      const groups = new Map<number, Array<{ n: number; value: string }>>()
+      for (const item of args.items as Array<{ n: number; value: string; frame?: number }>) {
+        const frame = item.frame ?? 0
+        const group = groups.get(frame)
+        if (group === undefined) groups.set(frame, [{ n: item.n, value: item.value }])
+        else group.push({ n: item.n, value: item.value })
+      }
+      const results: Array<Record<string, unknown>> = []
+      for (const [frame, items] of groups) {
+        const back = await act(exec, { op: 'fill_many', frame, items }, requestedTimeout(args)) as {
+          results?: Array<Record<string, unknown>>
+        }
+        for (const item of back.results ?? []) results.push({ frame, ...item })
+      }
+      return { results }
     },
   }))
 }

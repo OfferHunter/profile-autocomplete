@@ -88,3 +88,17 @@ describe('readProfile', () => {
     expect(text).toContain('x'.repeat(1000))
   })
 })
+
+describe('operating rules', () => {
+  it('reads the rules file and documents the fast scan / batch-fill path', () => {
+    const sections: Array<{ name: string; text: string | (() => string) }> = []
+    const ctx = {
+      systemPrompt: { section: (section: { name: string; text: string | (() => string) }) => { sections.push(section) } },
+    } as unknown as Context
+    registerPrompt(ctx, { knowledgeDir: 'missing', attachmentsDir: 'missing' })
+    const section = sections.find(s => s.name === 'form-filler:rules')!
+    const rules = typeof section.text === 'function' ? section.text() : section.text
+    expect(rules).toContain('form_scan')
+    expect(rules).toContain('form_fill_batch')
+  })
+})
