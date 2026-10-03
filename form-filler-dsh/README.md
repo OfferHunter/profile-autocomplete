@@ -50,13 +50,15 @@ kind: "package-reference"
 
 ### 工具流程
 
-模型先绑定标签页，再观察，按需读取 DOM，最后操作。
+模型先绑定标签页，再观察，用 `todo_write` 规划要填的各个部分，按需读取 DOM 后操作，收工前自检。
 
 1. `form_tabs` 列出每个已连接浏览器及其 HTTP(S) 标签页；`form_attach` 把本会话绑定到其中一个。
 2. `form_observe` 把每个 frame 的实时 DOM 写入 `runDir` 下的文件，并返回逐 frame 的路径索引与一张整页截图。本地不做任何过滤，模型用内置 `read`/`grep` 读取真实 DOM。
-3. 字段多、且多为标准控件时走快路径：`form_scan` 一次性枚举所有可填控件（地址、当前状态、多来源候选标签），模型据此判断每个控件对应资料里的哪个键，再用 `form_fill_batch` 一条命令批量写入，最后重新 `form_observe` 复核。`form_scan` 只枚举、不筛选，隐藏/禁用/文件/按钮类控件也列出并打 `visible`/`disabled`/`readonly` flag；批量写跳过已有有效值的项，写不了的（自定义下拉、日期控件等）带 `reason` 拒绝。
-4. 剩下的用 `form_fill`、`form_click`、`form_type`、`form_hover`、`form_scroll`、`form_wait`、`form_upload` 按元素地址慢填，并返回浏览器的回读。
-5. 关键操作后重新观察会刷新地址，因为过期快照会被拒绝。
+3. 看清页面分区后，用 `todo_write` 列出本次要填的任务清单（每个部分一条，先 `pending`），之后整表更新状态。
+4. 字段多、且多为标准控件时走快路径：`form_scan` 一次性枚举所有可填控件（地址、当前状态、多来源候选标签），模型据此判断每个控件对应资料里的哪个键，再用 `form_fill_batch` 一条命令批量写入，最后重新 `form_observe` 复核。`form_scan` 只枚举、不筛选，隐藏/禁用/文件/按钮类控件也列出并打 `visible`/`disabled`/`readonly` flag；批量写跳过已有有效值的项，写不了的（自定义下拉、日期控件等）带 `reason` 拒绝。
+5. 剩下的用 `form_fill`、`form_click`、`form_type`、`form_hover`、`form_scroll`、`form_wait`、`form_upload` 按元素地址慢填，并返回浏览器的回读。
+6. 关键操作后重新观察会刷新地址，因为过期快照会被拒绝。
+7. 全部待办完成后收尾自检：核对 `required`/`aria-required`/`*` 标注的必填项有无缺漏（含再保存一次读取网站字段级校验报错），并对照资料确认项目经历、获奖、证书等选填经历已尽力展开；缺漏补回清单逐条清掉后再结束。
 
 `form_read` 与 `form_look` 是廉价的只读路径：前者读值与选项，后者出定向截图。
 
@@ -142,7 +144,7 @@ schema 与可见性不变时前缀稳定。追加的工具结果只让请求追�
 
 <a id="known-limitations-and-deferred-work"></a>
 
-- **询问路径依赖当前 preset** — 规则要求模型使用 `ask_user_question`，该工具由 standard agent preset 挂载；缺少 `@deepseek-ai/dsh-tool-ask-user` 的组合会让模型无法询问。
+- **部分工具依赖当前 preset** — 规则要求模型使用 `ask_user_question` 与 `todo_write`：前者由 standard agent preset 的 `@deepseek-ai/dsh-tool-ask-user` 挂载，后者由 `@deepseek-ai/dsh-tool-todo` 挂载；缺少对应包的组合会让模型无法询问或用清单规划与自检。
 - **图片需要支持图像的模型路由** — 工具结果直接携带 image block，不像 `read_image` 那样按路由模型声明的输入模态做门控；纯文本路由会在适配器处失败而非降级。
 - **跨域与封闭界面仍交给用户** — 扩展读不到封闭 shadow root、无法截取跨域 iframe、跟不上虚拟滚动下拉，也处理不了验证码/滑块；规则把这些交给 `ask_user_question`。
 - **截图会带出已填的值** — 文本通道可以做到键值分离，但页面图片是像素通道，会显示已录入的内容。
