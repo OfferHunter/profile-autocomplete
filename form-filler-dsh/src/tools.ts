@@ -1,7 +1,7 @@
 /**
  * The model-facing form-filling tool set: perception primitives (`form_tabs`,
  * `form_attach`, `form_observe`, `form_look`, `form_read`, `form_scan`,
- * `form_record`) plus action primitives (`form_fill`, `form_fill_batch`,
+ * `form_record_mutation`) plus action primitives (`form_fill`, `form_fill_batch`,
  * `form_click`, `form_type`, `form_hover`, `form_scroll`, `form_wait`,
  * `form_upload`).
  *
@@ -22,6 +22,7 @@ import type { Session } from '@deepseek-ai/dsh-session'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import type { Bridge, ActResult, ObserveResult, ShotResult } from './bridge.ts'
+import type { ContextMemory } from './context-memory.ts'
 import type { ImageMemory } from './image-memory.ts'
 
 /** One frame's file index in a `form_observe` result. */
@@ -151,6 +152,8 @@ export interface ToolsOptions {
   runDir: string
   /** The image working set every screenshot is recorded into. */
   memory: ImageMemory
+  /** The text channel's fold service, driven by `form_clear`. */
+  contextMemory: ContextMemory
 }
 
 /** One element-targeted action forwarded to the extension. */
@@ -247,13 +250,56 @@ function json(value: unknown): ContentBlock[] {
   return [{ type: 'text', text: JSON.stringify(value) }]
 }
 
+/** One todo item as recorded by `todo_write` in the session log. */
+interface TodoEntry {
+  content: string
+  status: string
+}
+
+/** Status → checkbox glyph for the checkpoint panel's todo block. */
+const TODO_MARK: Record<string, string> = { completed: 'x', in_progress: '>', pending: ' ' }
+
 /**
- * Register the fifteen `form_*` tools plus `drop_images` on the plugin context.
+ * Read the current todo list from the session log: the latest `todo/write`
+ * event, cleared by a later `turn/start` (mirroring the todo projection's
+ * last-write-wins fold). Returns undefined when none has been written.
+ */
+function latestTodos(session: Session): TodoEntry[] | undefined {
+  // oxlint-disable-next-line typescript/no-deprecated -- whole-log scan at a checkpoint
+  const events = session.snapshotEvents()
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i] as { type: string; data: unknown } | undefined
+    if (event === undefined) continue
+    if (event.type === 'turn/start') return undefined
+    if (event.type === 'todo/write') {
+      const data = event.data as { todos?: TodoEntry[] }
+      return data.todos
+    }
+  }
+  return undefined
+}
+
+/** Render the checkpoint panel's working set: snapshot file paths and the todo list. */
+function renderWorkSet(frames: FrameIndex[] | undefined, todos: TodoEntry[] | undefined): string {
+  const lines: string[] = []
+  if (frames !== undefined && frames.length > 0) {
+    lines.push('快照文件（可 read 查看真实 DOM）：')
+    for (const frame of frames) lines.push(`- frame ${frame.frameId}: ${frame.path}`)
+  }
+  if (todos !== undefined && todos.length > 0) {
+    lines.push('待办：')
+    for (const todo of todos) lines.push(`- [${TODO_MARK[todo.status] ?? ' '}] ${todo.content}`)
+  }
+  return lines.join('\n')
+}
+
+/**
+ * Register the sixteen `form_*` tools plus `drop_images` on the plugin context.
  * @param ctx - the plugin context carrying `ctx.tools`.
- * @param options - the bridge, the snapshot run directory, and the image working set.
+ * @param options - the bridge, the snapshot run directory, the image working set, and the context fold service.
  */
 export function registerTools(ctx: Context, options: ToolsOptions): void {
-  const { bridge, runDir, memory } = options
+  const { bridge, runDir, memory, contextMemory } = options
   // The frame index hands the model absolute paths, so anchor the relative run
   // dir to the session's own working directory per call (see sessionCwd).
   const snapshotRootOf = (exec: ToolExecution): string => resolve(sessionCwd(exec), runDir)
@@ -612,7 +658,7 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
       + 'so the click probably did nothing — right for revealing a blocked target, wrong for a real click. '
       + 'A trusted click whose computed screen point is outside the viewport is refused with reason '
       + 'point_offscreen rather than fired blindly (virtual lists place measurement phantoms far off-screen). '
-      + 'A successful dispatch only means the event was sent — verify with form_record / form_observe.',
+      + 'A successful dispatch only means the event was sent — verify with form_record_mutation / form_observe.',
     parameters: {
       n: { type: 'integer', required: true, description: 'Element address from the snapshot.' },
       frame: { type: 'integer', description: 'Frame id. Defaults to 0.' },
@@ -857,7 +903,7 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
   }))
 
   ctx.tools.register(defineTool({
-    name: 'form_record',
+    name: 'form_record_mutation',
     description: 'Run a batch of actions on the bound tab and return only what those actions changed in the DOM — the new '
       + 'subtrees and attribute changes, serialized as snapshot HTML with addresses (the same data-pa-n as form_observe). '
       + 'Use it whenever a step is expected to make something appear and you need its address: open a custom dropdown/date '
@@ -866,7 +912,7 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
       + 'the whole page after every step" pattern. It is pure perception — nothing is pre-classified as an option or a '
       + 'field, you judge from the returned HTML. Detection is quiescence-based: it returns once the DOM has been still for '
       + 'settleMs, or at maxWaitMs for pages that never stop animating. `ops` run in order; each op is one of the existing '
-      + 'actions (fill, click, type, hover, scroll, upload, read), and nesting form_record is rejected. Between consecutive '
+      + 'actions (fill, click, type, hover, scroll, upload, read), and nesting form_record_mutation is rejected. Between consecutive '
       + 'ops it pauses opDelayMs (default 400) so an op that opens a popup or starts an animation has taken effect before '
       + 'the next runs — so a multi-step batch (open dropdown, arrow, Enter) works in one call. No '
       + 'confirmation screenshots are taken. If a frame reports truncated, the diff hit `limit` (or a huge subtree cap) — '
@@ -1064,6 +1110,45 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
         for (const item of back.results ?? []) results.push({ frame, ...item })
       }
       return { results }
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'form_clear',
+    description: 'Fold finished work out of the context window. Everything you (the assistant) thought and every tool call '
+      + 'and readback since your previous form_clear is replaced by a single note holding the `kept` text you pass, plus '
+      + 'the current working set (the latest snapshot file paths and the todo list). Call it once you finish filling a page '
+      + 'section — right after marking that todo completed — so the verbose chain stops occupying the window. '
+      + '`kept` is ALL that survives of the section, so it must be self-sufficient: what got filled and with what, which option '
+      + 'was chosen, what the site rejected, what is still left — everything a later step will need to know. A vague `kept` '
+      + 'loses the section. User messages, the system prompt, the plugin rules/profile, and the image panel are never folded, and '
+      + 'the snapshot files stay on disk, so details remain reachable by reading the paths in the working set.',
+    parameters: {
+      kept: {
+        type: 'string', required: true,
+        description: 'Your own summary of the finished section — the only thing kept in place of its tool chain.',
+      },
+    },
+    output: {
+      schema: {
+        type: 'object', additionalProperties: false,
+        properties: {
+          folded: { type: 'integer', required: true },
+        },
+      },
+      render: (_args, value): ContentBlock[] => [{
+        type: 'text',
+        text: value.folded > 0
+          ? `已折叠 ${value.folded} 个节点为一条概括。`
+          : '当前没有可折叠的内容（上一个检查点之后还没有工具调用）。',
+      }],
+    },
+    // oxlint-disable-next-line typescript/require-await -- the tool execute contract returns a Promise
+    async execute(args, exec) {
+      const session = sessionOf(exec)
+      const state = stateOf(exec)
+      const workSet = renderWorkSet(state.frames, latestTodos(session))
+      return { folded: contextMemory.fold(session, args.kept, workSet).folded }
     },
   }))
 

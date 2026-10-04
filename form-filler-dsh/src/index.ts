@@ -14,6 +14,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { Bridge } from './bridge.ts'
+import { ContextMemory } from './context-memory.ts'
 import { ImageMemory } from './image-memory.ts'
 import { registerPrompt } from './prompt.ts'
 import { registerTools } from './tools.ts'
@@ -99,6 +100,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const memory = new ImageMemory(name, { cropSlotSize: resolved.cropSlotSize })
   memory.install(ctx)
 
-  registerTools(ctx, { bridge, runDir: resolved.runDir, memory })
+  const contextMemory = new ContextMemory(name)
+
+  registerTools(ctx, { bridge, runDir: resolved.runDir, memory, contextMemory })
   registerPrompt(ctx, { knowledgeDir: resolved.knowledgeDir, attachmentsDir: resolved.attachmentsDir })
 }

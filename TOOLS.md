@@ -137,7 +137,7 @@
   - 依赖活 DOM（可见性靠 `getComputedStyle`、空间邻近靠 `getBoundingClientRect`）。
   - **前置条件**：需先 `form_observe`（要有 `snapshotId`）。
 
-### form_record
+### form_record_mutation
 
 把一批动作包起来执行，**只返回这些动作引起的 DOM 变化**。取代"每步之后整页观测"。
 
@@ -181,6 +181,35 @@
 
 - **输入**：`ids`（integer[]，必填）。
 - **输出**：`{ dropped, remaining: { full, crops } }`。
+
+### form_clear
+
+把上一段已完成的工作**折叠出上下文**：文本侧的 `drop_images`。完成一个页面分区的填报
+（在 `todo_write` 里把它标成 `completed` 之后）就调一次，让冗长的工具链不再占用窗口。
+
+- **输入**：`kept`（string，必填）——这一段要留下的**唯一**内容。
+- **输出**：`{ folded }`；`folded` 为本轮折叠掉的节点数（无可折叠内容时为 0）。
+- **折叠范围**：**上一个「洞」到当前这条 assistant 消息之间**。洞＝ `user/message` 或
+  `system/message` 节点（系统提示词、注入的规则/资料段、图像记忆面板、真实用户发言、
+  `ask_user_question` 的回答）。因此：
+  - **只折叠 `assistant/message` 与 `tool/result`**——你的思考、工具调用与回读；
+    用户发言、系统提示、资料、图像面板**永不动**。
+  - 折叠后插入一条 `user/message` 检查点面板（带来源标记，与图像面板同构），
+    它自身即成为下一个洞，**无需游标记账**（幂等：无新内容时可折叠数为 0）。
+  - 整段折叠**要么整段、要么不动**：只要范围里混进一个非 assistant/tool 节点就不折，
+    避免把工具结果与它的 assistant 调用切散（悬空的 tool_calls 会被 provider 拒绝）。
+- **面板内容**：`【上下文概括】` 头 + `【本段小结】<kept>` + `【工作集】`（最新快照
+  文件路径，按 frame 列出；当前待办清单，取自最近一次 `todo_write`，`turn/start` 后清空）。
+  工作集为空（既无快照也无待办）时省略该块。
+- **`kept` 必须自足**：它是这一段唯一留下的东西，要写清这块填了什么、选了哪个选项、
+  网站拒了什么、还差什么。写得含糊，这一段就丢了。
+- **实现**（`form-filler-dsh/src/context-memory.ts`）：
+  - 读 `session.surface.nodes` 找最后一条 `assistant/message` 与它之前的最后一个洞，
+    把夹在中间、且**全部**为 `assistant/message`/`tool/result` 的连续区段用
+    `surfaceOp: { op:'replace', startSeq, endSeq }` + `sourceEventSeqs` 折成一条面板。
+  - 之所以折成 **`user/message`** 而非 assistant：harness 里 `assistant/message` 带
+    `sourceEventSeqs?: never`，只有 user/system 节点能声明"我遮蔽了这一段"。
+  - 快照文件仍留在磁盘上，随时可 read；`snapshotId` 存在会话状态里，不随折叠丢失。
 
 ---
 
@@ -257,9 +286,9 @@ ARIA 的子树里时才解析；普通文本框的读法一字不变、零额外
     再派发 `mouseMoved → mousePressed → mouseReleased`（跨 iframe 也由坐标路由）。
     若算出的坐标**落在视口外**（虚拟列表常把"测量幽灵行"放在超大负偏移处），直接返回
     `point_offscreen` 而**不派发**，以免点到空处、误触关闭浮层。
-  - **推荐策略**：先默认 DOM 点击；只有 `form_record` 差分 `noChange`（控件对 DOM 点击
+  - **推荐策略**：先默认 DOM 点击；只有 `form_record_mutation` 差分 `noChange`（控件对 DOM 点击
     完全无反应）时，才升级 `trusted:true`。
-  - 返回 `dispatched` 只代表事件已发出，是否生效要用 `form_record`/`form_observe` 确认。
+  - 返回 `dispatched` 只代表事件已发出，是否生效要用 `form_record_mutation`/`form_observe` 确认。
 
 ### form_type
 
@@ -329,7 +358,7 @@ Agent 反馈「求职意向」4 个下拉用了约 40 次调用。定位到 4 �
 | 零变更差分无信号 | 关弹窗/点开又开报不出任何东西 | **P3**：`record` 收 `removedNodes` 报 `removed`，并给 `noChange` 显式标记 |
 | 确认图拍到展开中间态 | DOM 快照有 600ms 防抖，截图却零延迟，弹层 CSS 动画没走完就抓 | **P5**：`cdp.js` 截图前 `settle(SETTLE_MS=400)`，整页图/裁剪图/确认图统一生效 |
 | 批内多步撞车 | `record` 的 op 背靠背执行，`[开下拉, 方向键, 回车]` 里按键落在浮层就绪之前 | **P6**：`recordRun` 相邻 op 之间垫 `opDelayMs`（默认 400，仅步与步之间、最后一步不等） |
-| 两个延迟写死 | 慢动画控件页希望按需调大等待 | **P5/P6 参数化**：截图的 `SETTLE_MS` 放成 `settleMs`（observe/look/fill/click/type 均可传，默认 400）；批内间隔放成 `opDelayMs`（form_record，默认 400） |
+| 两个延迟写死 | 慢动画控件页希望按需调大等待 | **P5/P6 参数化**：截图的 `SETTLE_MS` 放成 `settleMs`（observe/look/fill/click/type 均可传，默认 400）；批内间隔放成 `opDelayMs`（form_record_mutation，默认 400） |
 
 配套的提示词调整（`form-filler-dsh/prompts/system.md`）：点击**先 DOM、无效再升 trusted**；
 虚拟列表用 `form_type` 的 `repeat` 与 `form_scroll` 的 `dy`，并按 `activeOption` 核对落点。
@@ -349,7 +378,7 @@ Ant Design / Element / bootstrap-select / 级联弹窗各自的"开法"编码进
 | `form-filler-chrome/src/content/record.js` | 记录 `removedNodes`，输出 `removed` 与 `noChange` |
 | `form-filler-chrome/src/background/cdp.js` | 补 `Home/End/PageUp/PageDown`；新增 `viewportSize`；截图前 `settle(SETTLE_MS=400)`（P5），并允许按调用覆盖（`settleMs`） |
 | `form-filler-chrome/src/background/bridge.js` | `type` 支持 `repeat`；trusted 点击视口外拒绝 + 附命中自校验；`scroll` 透传 `dy`；`record` 相邻 op 之间垫 `opDelayMs`（P6）；截图透传 `settleMs` |
-| `form-filler-dsh/src/tools.ts` | `form_type` 加 `repeat`；`form_scroll` 加 `dy`；`record` op 加 `repeat`；输出 schema 增相应字段与 `removed/noChange`；出图工具加 `settleMs`、`form_record` 加 `opDelayMs`；更新工具描述 |
+| `form-filler-dsh/src/tools.ts` | `form_type` 加 `repeat`；`form_scroll` 加 `dy`；`record` op 加 `repeat`；输出 schema 增相应字段与 `removed/noChange`；出图工具加 `settleMs`、`form_record_mutation` 加 `opDelayMs`；更新工具描述 |
 | `form-filler-dsh/src/bridge.ts` | `ActResult` 补类型字段 |
 | `form-filler-dsh/prompts/system.md` | DOM-first 点击；虚拟列表用法 |
 | `form-filler-chrome/tests/verify-dom.mjs` | 新增 9 条针对 P1–P4 的回归断言 |
@@ -369,7 +398,7 @@ Ant Design / Element / bootstrap-select / 级联弹窗各自的"开法"编码进
 
 ## 7. 测试
 
-- DSH 插件回归（33 用例）：在 `form-filler-dsh/` 下用 harness 的 vitest 运行。
+- DSH 插件回归（41 用例）：在 `form-filler-dsh/` 下用 harness 的 vitest 运行。
 - 扩展侧 DOM/动作回归：`node form-filler-chrome/tests/verify-dom.mjs`（需本机 Edge）。
   直接操纵 `window.__PA.act.dispatch(...)` 断言快照与动作行为。
   同目录还有 `verify-scan.mjs`（scan 枚举与批量写）、`verify-extension.mjs`（整链路）、

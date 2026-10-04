@@ -14,6 +14,7 @@ import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import { Bridge } from '../src/bridge.ts'
+import { ContextMemory } from '../src/context-memory.ts'
 import { ImageMemory } from '../src/image-memory.ts'
 import { registerTools } from '../src/tools.ts'
 import { connectExtension, freePort, type CommandMessage, type FakeExtension } from './harness.ts'
@@ -121,7 +122,8 @@ async function boot(options: { attachments?: boolean; observeDelayMs?: number } 
   await context.plugin(ToolRuntime)
   if (options.attachments === true) context.provide('attachments', attachmentsStub)
   memory = new ImageMemory('form-filler', { cropSlotSize: 20 })
-  registerTools(context, { bridge: instance, runDir: join(root, 'runs'), memory })
+  const contextMemory = new ContextMemory('form-filler')
+  registerTools(context, { bridge: instance, runDir: join(root, 'runs'), memory, contextMemory })
 
   extension = await connectExtension({
     port, browser: 'browser-a', tabs: [TAB],
@@ -352,11 +354,11 @@ describe('form-filler tools with an attachment store', () => {
     expect(mixedFrames).toEqual([0, 1])
   })
 
-  it('form_record forwards a batch and returns the per-frame diff', async () => {
+  it('form_record_mutation forwards a batch and returns the per-frame diff', async () => {
     await boot()
     await attachAndObserve()
 
-    const res = value(await call('form_record', {
+    const res = value(await call('form_record_mutation', {
       ops: [{ op: 'click', n: 4, trusted: true }],
       settleMs: 150,
     }))
