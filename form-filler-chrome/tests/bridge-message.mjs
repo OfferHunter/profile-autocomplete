@@ -73,9 +73,9 @@ assert.equal(broken.replies[0].result.ok, false);
 assert.match(broken.replies[0].result.error, /storage unavailable/);
 console.log('PASS dedicated port waits for cold startup and explicitly reports initialization failures');
 
-// Regression: one command that never settles must not block the queue forever. The
-// host cancels after its own deadline; the extension has to drop that wait, advance
-// the queue, and still serve the next command.
+// Regression: one command that never settles must not block its tab's lane forever.
+// The host cancels after its own deadline; the extension has to drop that wait,
+// advance the lane, and still serve the next command on the same tab.
 {
   const sent = [];
   class ScriptedWebSocket {
@@ -107,4 +107,47 @@ console.log('PASS dedicated port waits for cold startup and explicitly reports i
   assert.ok(results.some(message => message.id === 'hang' && message.ok === false),
     'the cancelled command settled with an error instead of hanging');
   console.log('PASS a cancelled command releases the serialized queue');
+}
+
+// Regression: a command stuck on one tab must NOT block commands to another tab.
+// Each tab has its own lane, so a hung observe on tab 1 lets tab 2 proceed; only
+// screenshots share a global lock (they need the foreground tab). Under the old
+// single global queue, tab 2's result could not appear until tab 1 settled.
+{
+  const sent = [];
+  class ScriptedWebSocket {
+    static OPEN = 1;
+    static last = null;
+    constructor() { this.readyState = 1; ScriptedWebSocket.last = this; }
+    close() { this.readyState = 3; }
+    send(data) { sent.push(JSON.parse(data)); }
+  }
+  chrome.storage.local.get = async () => ({});
+  chrome.tabs.get = async () => ({ id: 1, url: 'https://jobs.example.com/apply', title: 't', active: true });
+  context.WebSocket = ScriptedWebSocket;
+
+  // observe on tab 1 hangs forever inside the collector.
+  await vm.runInContext('startBridge(() => new Promise(() => {}));', context);
+  const ws = ScriptedWebSocket.last;
+  const deliver = payload => ws.onmessage({ data: JSON.stringify(payload) });
+  const results = () => sent.filter(message => message.type === 'result');
+
+  deliver({ type: 'command', id: 'slow', op: 'observe', tabId: 1, view: {} });
+  await new Promise(resolve => setImmediate(resolve));
+  // A second tab's command must run without waiting for the hung one.
+  deliver({ type: 'command', id: 'other', op: 'bogus', tabId: 2 });
+  await new Promise(resolve => setImmediate(resolve));
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.ok(results().some(message => message.id === 'other'),
+    'a command on tab 2 ran while tab 1 was still stuck (per-tab lanes)');
+  assert.ok(!results().some(message => message.id === 'slow'),
+    'the hung command on tab 1 had not settled yet');
+  console.log('PASS a stuck command on one tab does not block another tab');
+
+  // Release the hung command so the process can exit cleanly.
+  deliver({ type: 'cancel', id: 'slow' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(results().some(message => message.id === 'slow' && message.ok === false),
+    'the cancelled command settled with an error');
 }

@@ -12,8 +12,12 @@ const observations = new Map();
 // 在途命令：id → 能让该命令"放弃等待"的 reject 句柄。promise 无法被停止，所以
 // cancel 只能结束等待，不能终止 command() 本身（它会变成孤儿自生自灭）。
 const aborts = new Map();
-// Browser operations are serialized: activating tabs for capture must not race.
-let queue = Promise.resolve();
+// 命令按标签页分道并行：不同标签页的操作（内容脚本 / 各自 document）互不相干，可同时跑；
+// 同一标签页的命令排在同一条道里仍先后执行。唯一需要独占的是截图 —— 非前台标签页的
+// captureBeyondViewport 会永不返回，所以截图的 ensureActive→抓图整段走一条全局锁，
+// 避免两次截图互相把对方的标签页踢到后台。
+const lanes = new Map();
+let captureLock = Promise.resolve();
 
 function send(data) {
   if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(data));
@@ -56,25 +60,32 @@ async function topDocumentId(tabId) {
 
 // 截图选择：n 定向裁剪 > y 分窗 > 整页概览。任何一步失败都退到下一档，绝不让
 // "确认图没取到"把一次成功的写入变成失败。
-async function capture(tab, view, topDocumentId) {
-  await cdp.attach(tab.id);
-  try {
-    let shot;
-    if (view.n != null && (view.frame || 0) === 0 && topDocumentId) {
-      const box = await act(tab.id, 0, topDocumentId, { op: 'box', n: view.n });
-      if (box.ok && box.box && box.box.top !== false) {
-        try { shot = await cdp.cropAround(tab.id, box.box); } catch { /* 退到整页 */ }
+//
+// 整段套全局锁：截图独占"前台标签页"（非前台标签页的 captureBeyondViewport 会永不
+// 返回），并发截图会互相把对方踢到后台。不吃前台的 DOM 操作不在此锁内，可跨标签页并行。
+function capture(tab, view, topDocumentId) {
+  const run = captureLock.then(async () => {
+    await cdp.attach(tab.id);
+    try {
+      let shot;
+      if (view.n != null && (view.frame || 0) === 0 && topDocumentId) {
+        const box = await act(tab.id, 0, topDocumentId, { op: 'box', n: view.n });
+        if (box.ok && box.box && box.box.top !== false) {
+          try { shot = await cdp.cropAround(tab.id, box.box); } catch { /* 退到整页 */ }
+        }
       }
+      if (!shot && view.y > 0) {
+        const size = await cdp.contentSize(tab.id);
+        shot = await cdp.region(tab.id, { x: 0, y: Math.min(view.y, Math.max(0, size.height - 1)), width: size.width, height: 2000 });
+      }
+      if (!shot) shot = await cdp.overview(tab.id);
+      return shot;
+    } finally {
+      await cdp.detach(tab.id);
     }
-    if (!shot && view.y > 0) {
-      const size = await cdp.contentSize(tab.id);
-      shot = await cdp.region(tab.id, { x: 0, y: Math.min(view.y, Math.max(0, size.height - 1)), width: size.width, height: 2000 });
-    }
-    if (!shot) shot = await cdp.overview(tab.id);
-    return shot;
-  } finally {
-    await cdp.detach(tab.id);
-  }
+  });
+  captureLock = run.then(() => {}, () => {});
+  return run;
 }
 
 // DOM 级就走 content script（在页面上下文里做，稳且少一层转义）。
@@ -187,8 +198,9 @@ function connect() {
   clearInterval(heartbeat);
   if (socket) { socket.onclose = null; socket.close(); }
   connected = false;
-  // 新连接起一条全新的命令链：上一条连接遗留的孤儿任务绝不能再堵住这条。
-  queue = Promise.resolve();
+  // 新连接起全新的命令链：上一条连接遗留的孤儿任务绝不能再堵住这条。
+  lanes.clear();
+  captureLock = Promise.resolve();
   const ws = new WebSocket((config.url || DEFAULT_URL).replace('http:', 'ws:') + '/bridge');
   socket = ws;
   ws.onopen = () => send({ type: 'hello', browser: config.browser });
@@ -213,7 +225,9 @@ function connect() {
       // cancel 可能在命令还没轮到执行时就到达，此时没人 await 它，先挂一个空处理。
       aborted.catch(() => {});
       aborts.set(id, abort);
-      queue = queue.catch(() => {}).then(async () => {
+      // 每条标签页一条道：别的标签页的命令不等这条道，本标签页的仍按序。
+      const lane = lanes.get(msg.tabId) ?? Promise.resolve();
+      const next = lane.catch(() => {}).then(async () => {
         // 还没开跑就被取消：直接跳过，别去启动一份注定被抛弃的工作。
         if (cancelled || socket !== ws || ws.readyState !== WebSocket.OPEN) { aborts.delete(id); return; }
         let backstop;
@@ -233,6 +247,7 @@ function connect() {
           aborts.delete(id);
         }
       });
+      lanes.set(msg.tabId, next);
     }
   };
   ws.onerror = () => { lastError = '无法连接本地服务'; };
@@ -306,7 +321,7 @@ export function startBridge(collector) {
     if (change.status === 'loading' || change.url) observations.delete(id);
     publishTabs().catch(() => {});
   });
-  chrome.tabs.onRemoved.addListener(id => { observations.delete(id); publishTabs().catch(() => {}); });
+  chrome.tabs.onRemoved.addListener(id => { observations.delete(id); lanes.delete(id); publishTabs().catch(() => {}); });
   chrome.alarms.onAlarm.addListener(alarm => {
     if (alarm.name === 'pa-reconnect' && !connected && socket?.readyState !== WebSocket.CONNECTING) connect();
   });
