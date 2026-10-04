@@ -68,6 +68,17 @@ const scanResults = () => ({
 
 const shotResult = () => ({ image: shotImage, clip: CLIP, pageHeight: 1200 })
 
+/** The `record` reply: per-op readbacks plus one frame's added subtree and attribute change. */
+const recordResults = () => ({
+  ops: [{ ok: true, dispatched: true }],
+  frames: [{
+    frameId: 0,
+    added: [{ n: 12, tag: 'div', html: '<div data-pa-n="12">选项 A</div>' }],
+    changed: [{ n: 4, tag: 'input', changes: ['aria-expanded'], html: '<input data-pa-n="4" aria-expanded="true">' }],
+    truncated: false,
+  }],
+})
+
 const attachmentsStub = {
   async saveImage(input: { data: Uint8Array; mediaType: string }) {
     return {
@@ -126,6 +137,7 @@ async function boot(options: { attachments?: boolean; observeDelayMs?: number } 
       if (command.op === 'act') {
         const call = (command as { call?: { op?: string; items?: Array<{ n: number; value: string }> } }).call
         if (call?.op === 'scan') return { ok: true, result: scanResults() }
+        if (call?.op === 'record') return { ok: true, result: recordResults() }
         if (call?.op === 'fill_many') {
           return {
             ok: true,
@@ -321,5 +333,28 @@ describe('form-filler tools with an attachment store', () => {
       command => command.op === 'act' && (command as { call?: { op?: string } }).call?.op === 'fill_many',
     )
     expect(batched).toHaveLength(2)
+  })
+
+  it('form_record forwards a batch and returns the per-frame diff', async () => {
+    await boot()
+    await attachAndObserve()
+
+    const res = value(await call('form_record', {
+      ops: [{ op: 'click', n: 4, trusted: true }],
+      settleMs: 150,
+    }))
+    const frames = res.frames as Array<{ frameId: number; added: Array<{ n: number }>; changed: Array<{ n: number }> }>
+    expect(frames[0].frameId).toBe(0)
+    expect(frames[0].added[0].n).toBe(12)
+    expect(frames[0].changed[0].n).toBe(4)
+
+    // The batch rides one `record` command whose call carries the ops and the window.
+    const records = extension!.commands.filter(
+      command => command.op === 'act' && (command as { call?: { op?: string } }).call?.op === 'record',
+    )
+    expect(records).toHaveLength(1)
+    const sent = (records[0] as { call: { ops: Array<{ op: string; n: number; trusted: boolean; frame: number }>; settleMs: number } }).call
+    expect(sent.ops[0]).toMatchObject({ op: 'click', n: 4, trusted: true, frame: 0 })
+    expect(sent.settleMs).toBe(150)
   })
 })

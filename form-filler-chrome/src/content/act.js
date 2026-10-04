@@ -335,6 +335,10 @@
         return fillMany(call.items);
       case 'scan':
         return PA.scan ? PA.scan.scan(call) : { ok: false, reason: 'scan_unavailable', message: 'scan.js 未加载' };
+      case 'record_arm':
+        return PA.record ? PA.record.arm() : { ok: false, reason: 'record_unavailable', message: 'record.js 未加载' };
+      case 'record_collect':
+        return PA.record ? PA.record.collect(call) : { ok: false, reason: 'record_unavailable', message: 'record.js 未加载' };
       case 'click':
         return click(call.n);
       case 'read':

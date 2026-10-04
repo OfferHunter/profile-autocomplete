@@ -1,8 +1,9 @@
 /**
  * The model-facing form-filling tool set: perception primitives (`form_tabs`,
- * `form_attach`, `form_observe`, `form_look`, `form_read`, `form_scan`) plus
- * action primitives (`form_fill`, `form_fill_batch`, `form_click`, `form_type`,
- * `form_hover`, `form_scroll`, `form_wait`, `form_upload`).
+ * `form_attach`, `form_observe`, `form_look`, `form_read`, `form_scan`,
+ * `form_record`) plus action primitives (`form_fill`, `form_fill_batch`,
+ * `form_click`, `form_type`, `form_hover`, `form_scroll`, `form_wait`,
+ * `form_upload`).
  *
  * Every primitive is deliberately free of local judgement: nothing here decides
  * what counts as a field or whether a control "should" be filled. The snapshot
@@ -151,6 +152,20 @@ interface ActCall {
   limit?: number | undefined
   // `fill_many` payload.
   items?: Array<{ n: number; value: string }> | undefined
+  // `record` payload: the batch of ops to run between arm and collect.
+  ops?: ActCall[] | undefined
+  settleMs?: number | undefined
+  maxWaitMs?: number | undefined
+}
+
+/** One per-frame diff returned by `record`: new subtrees and attribute changes, as snapshot HTML. */
+interface RecordFrameDiff {
+  frameId: number
+  ok?: boolean
+  reason?: string
+  added?: Array<{ n: number; tag: string; html: string }>
+  changed?: Array<{ n: number; tag: string; changes: string[]; html?: string }>
+  truncated?: boolean
 }
 
 /** One control reported by `form_scan` (label kinds are open-ended). */
@@ -196,7 +211,7 @@ function json(value: unknown): ContentBlock[] {
 }
 
 /**
- * Register the fourteen `form_*` tools plus `drop_images` on the plugin context.
+ * Register the fifteen `form_*` tools plus `drop_images` on the plugin context.
  * @param ctx - the plugin context carrying `ctx.tools`.
  * @param options - the bridge, the snapshot run directory, and the image working set.
  */
@@ -780,6 +795,131 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
         })
       }
       return { frames }
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'form_record',
+    description: 'Run a batch of actions on the bound tab and return only what those actions changed in the DOM — the new '
+      + 'subtrees and attribute changes, serialized as snapshot HTML with addresses (the same data-pa-n as form_observe). '
+      + 'Use it whenever a step is expected to make something appear and you need its address: open a custom dropdown/date '
+      + 'picker (click the trigger, trusted true) and read the option addresses from `added`; click an "add row/section" '
+      + 'button and get the new form block; save or switch a tab and read the validation message. It replaces the "observe '
+      + 'the whole page after every step" pattern. It is pure perception — nothing is pre-classified as an option or a '
+      + 'field, you judge from the returned HTML. Detection is quiescence-based: it returns once the DOM has been still for '
+      + 'settleMs, or at maxWaitMs for pages that never stop animating. `ops` run in order; each op is one of the existing '
+      + 'actions (fill, click, type, hover, scroll, upload, read), and nesting form_record is rejected. No '
+      + 'confirmation screenshots are taken. If a frame reports truncated, the diff hit `limit` (or a huge subtree cap) — '
+      + 'narrow it with form_type to filter a virtual list, or form_scroll the popup and record again.',
+    parameters: {
+      ops: {
+        type: 'array', required: true,
+        description: 'Actions to run in order before reading the diff.',
+        items: {
+          type: 'object', additionalProperties: false,
+          properties: {
+            op: {
+              type: 'string', required: true,
+              enum: ['fill', 'click', 'type', 'hover', 'scroll', 'upload', 'read'],
+              description: 'The action to run.',
+            },
+            n: { type: 'integer', description: 'Element address (for element-targeted ops).' },
+            value: { type: 'string', description: 'Value for fill.' },
+            text: { type: 'string', description: 'Text for type.' },
+            key: { type: 'string', description: 'Special key for type.' },
+            path: { type: 'string', description: 'Absolute path for upload.' },
+            trusted: { type: 'boolean', description: 'Use a real (trusted) event via CDP, for click/hover.' },
+            frame: { type: 'integer', description: 'Frame id for this op. Defaults to the record frame.' },
+          },
+        },
+      },
+      frame: { type: 'integer', description: 'Frame id for the batch. Defaults to 0 (top document).' },
+      settleMs: { type: 'integer', description: 'Quiescence window in ms — collect once the DOM is still this long. Defaults to 300.' },
+      maxWaitMs: { type: 'integer', description: 'Upper bound on the wait, for pages that never settle. Defaults to 2000, capped at 10000.' },
+      limit: { type: 'integer', description: 'Max characters of diff HTML returned per frame. Defaults to 40000.' },
+      ...TIMEOUT_PARAM,
+    },
+    output: {
+      schema: {
+        type: 'object', additionalProperties: false,
+        properties: {
+          ops: {
+            type: 'array', required: true,
+            description: 'Per-op readback, in order.',
+            items: {
+              type: 'object', additionalProperties: true,
+              properties: {
+                ok: { type: 'boolean', required: true },
+                reason: { type: 'string' },
+                message: { type: 'string' },
+              },
+            },
+          },
+          frames: {
+            type: 'array', required: true,
+            items: {
+              type: 'object', additionalProperties: false,
+              properties: {
+                frameId: { type: 'integer', required: true },
+                ok: { type: 'boolean' },
+                reason: { type: 'string' },
+                truncated: { type: 'boolean' },
+                added: {
+                  type: 'array',
+                  description: 'Newly inserted subtrees, serialized with addresses.',
+                  items: {
+                    type: 'object', additionalProperties: false,
+                    properties: {
+                      n: { type: 'integer', required: true },
+                      tag: { type: 'string', required: true },
+                      html: { type: 'string', required: true },
+                    },
+                  },
+                },
+                changed: {
+                  type: 'array',
+                  description: 'Elements whose attributes changed; container-level changes carry no html.',
+                  items: {
+                    type: 'object', additionalProperties: false,
+                    properties: {
+                      n: { type: 'integer', required: true },
+                      tag: { type: 'string', required: true },
+                      changes: { type: 'array', required: true, items: { type: 'string' } },
+                      html: { type: 'string' },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          navigated: { type: 'boolean', description: 'True when the document changed during the batch — the diff is no longer reliable; observe again.' },
+        },
+      },
+      render: (_args, value) => json(value),
+    },
+    async execute(args, exec) {
+      const frame = args.frame ?? 0
+      const ops: ActCall[] = (args.ops as Array<Record<string, unknown>>).map(op => ({
+        op: String(op.op),
+        frame: typeof op.frame === 'number' ? op.frame : frame,
+        ...op.n === undefined ? {} : { n: op.n as number },
+        ...op.value === undefined ? {} : { value: op.value as string },
+        ...op.text === undefined ? {} : { text: op.text as string },
+        ...op.key === undefined ? {} : { key: op.key as string },
+        ...op.path === undefined ? {} : { path: op.path as string },
+        ...op.trusted === undefined ? {} : { trusted: op.trusted as boolean },
+      }))
+      const maxWaitMs = args.maxWaitMs === undefined
+        ? undefined
+        : Math.max(0, Math.min(Math.round(args.maxWaitMs), 10_000))
+      return await act(exec, {
+        op: 'record', frame, ops,
+        settleMs: args.settleMs, maxWaitMs, limit: args.limit,
+      }, requestedTimeout(args)) as unknown as {
+        ops: Array<Record<string, unknown>>
+        frames: RecordFrameDiff[]
+        navigated?: boolean
+      }
     },
   }))
 

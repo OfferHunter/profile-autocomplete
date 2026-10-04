@@ -90,10 +90,10 @@ function capture(tab, view, topDocumentId) {
 
 // DOM 级就走 content script（在页面上下文里做，稳且少一层转义）。
 const DOM_OPS = new Set(['fill', 'click', 'read', 'box', 'focus', 'hover', 'scroll']);
-// scan / fill_many 也要在页面上下文里跑（活 DOM 的可见性与几何），且要整个 call 透传。
-const ACT_OPS = new Set([...DOM_OPS, 'type', 'upload', 'scan', 'fill_many']);
+// scan / fill_many / record 也要在页面上下文里跑（活 DOM 的可见性与几何），且要整个 call 透传。
+const ACT_OPS = new Set([...DOM_OPS, 'type', 'upload', 'scan', 'fill_many', 'record']);
 // 这些动作不吃单个整数地址 n。
-const NO_ADDRESS_OPS = new Set(['type', 'scan', 'fill_many']);
+const NO_ADDRESS_OPS = new Set(['type', 'scan', 'fill_many', 'record']);
 
 function domAct(tabId, frame, call) {
   return act(tabId, frame.frameId, frame.documentId, call);
@@ -146,7 +146,43 @@ async function uploadFile(tabId, frame, call) {
   }
 }
 
+// 把一批操作包起来跑，只回报它们引起的 DOM 变化：arm 各 frame → 按序跑 ops → collect 各 frame。
+// ops 复用 runAct 的既有分派（含 trusted 走 CDP），行为与单条操作完全一致；禁止嵌套 record。
+async function recordRun(tabId, frame, call) {
+  const observed = observations.get(tabId);
+  if (!observed) return { ok: false, reason: 'stale_snapshot' };
+  const frames = observed.frames;
+  const ops = Array.isArray(call.ops) ? call.ops : [];
+
+  const before = await topDocumentId(tabId);
+  await Promise.all(frames.map(f => domAct(tabId, f, { op: 'record_arm' }).catch(() => null)));
+
+  const results = [];
+  for (const op of ops) {
+    if (!op || !ACT_OPS.has(op.op) || op.op === 'record') {
+      results.push({ ok: false, reason: 'bad_op', message: `record 不支持的操作 ${op && op.op}` });
+      continue;
+    }
+    const opFrame = frames.find(f => f.frameId === (op.frame ?? frame.frameId)) ?? frame;
+    try {
+      results.push(await runAct(tabId, opFrame, op));
+    } catch (e) {
+      results.push({ ok: false, reason: 'exception', message: String((e && e.message) || e) });
+    }
+  }
+
+  const collected = await Promise.all(frames.map(f => domAct(tabId, f, {
+    op: 'record_collect', settleMs: call.settleMs, maxWaitMs: call.maxWaitMs, limit: call.limit,
+  }).catch(e => ({ ok: false, reason: 'collect_failed', message: String((e && e.message) || e) }))));
+
+  const after = await topDocumentId(tabId);
+  const navigated = before !== null && after !== null && before !== after;
+  const frameDiffs = frames.map((f, i) => ({ frameId: f.frameId, ...collected[i] }));
+  return { ops: results, frames: frameDiffs, ...(navigated ? { navigated: true } : {}) };
+}
+
 async function runAct(tabId, frame, call) {
+  if (call.op === 'record') return recordRun(tabId, frame, call);
   if (call.op === 'click' && call.trusted === true) return trustedPointer(tabId, frame, call.n, cdp.realClick);
   if (call.op === 'hover' && call.trusted === true) return trustedPointer(tabId, frame, call.n, cdp.moveTo);
   if (call.op === 'type') return typeInto(tabId, frame, call);
