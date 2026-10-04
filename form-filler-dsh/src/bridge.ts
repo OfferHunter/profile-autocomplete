@@ -73,12 +73,23 @@ export type ActResult = {
   actual?: JsonValue
   box?: ElementBox | null
   matchedOption?: { value: string; label: string }
-  /** Document offset after a `scroll`. */
+  /** Document offset after a window `scroll`. */
   scrollY?: number
+  /** Element-self `scroll` readback: the applied delta and the container's metrics. */
+  scrolled?: number
+  scrollTop?: number
+  scrollHeight?: number
+  clientHeight?: number
   /** Attached paths after an `upload`. */
   files?: string[]
   /** Synthesized pointer position after a trusted click or hover. */
   point?: { x: number; y: number }
+  /** Click self-check: whether the element's center hit the element rather than a cover. */
+  hitsTarget?: boolean
+  /** The element actually hit at the click point, when the check ran. */
+  hit?: JsonValue
+  /** Number of times a repeated special key was sent by `type`. */
+  repeat?: number
 }
 
 /** The result of a screenshot-only command. */

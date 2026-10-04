@@ -66,6 +66,11 @@ const ACT_RESULT_PROPERTIES = {
   // document offset, upload the attached paths, a trusted click/hover the
   // synthesized pointer position.
   scrollY: { type: 'integer' },
+  // Element-self scroll readback: the delta applied and the container's new metrics.
+  scrolled: { type: 'integer' },
+  scrollTop: { type: 'integer' },
+  scrollHeight: { type: 'integer' },
+  clientHeight: { type: 'integer' },
   files: { type: 'array', items: { type: 'string' } },
   point: {
     type: 'object',
@@ -75,6 +80,13 @@ const ACT_RESULT_PROPERTIES = {
       y: { type: 'integer', required: true },
     },
   },
+  // Click self-check: whether the element's center actually hit the element (or its
+  // subtree) rather than being covered, plus what was hit. False means the click
+  // likely did nothing — e.g. a modal overlay or an off-screen virtual-list phantom.
+  hitsTarget: { type: 'boolean' },
+  hit: { type: 'json' },
+  // Number of times a repeated special key was sent.
+  repeat: { type: 'integer' },
 } as const
 
 const ACT_RESULT_SCHEMA = {
@@ -138,10 +150,12 @@ interface ActCall {
   frame: number
   n?: number | undefined
   y?: number | undefined
+  dy?: number | undefined
   value?: string | undefined
   path?: string | undefined
   text?: string | undefined
   key?: string | undefined
+  repeat?: number | undefined
   trusted?: boolean | undefined
   // `scan` parameters.
   kinds?: string[] | undefined
@@ -158,13 +172,15 @@ interface ActCall {
   maxWaitMs?: number | undefined
 }
 
-/** One per-frame diff returned by `record`: new subtrees and attribute changes, as snapshot HTML. */
+/** One per-frame diff returned by `record`: new subtrees, attribute changes, and removals. */
 interface RecordFrameDiff {
   frameId: number
   ok?: boolean
   reason?: string
   added?: Array<{ n: number; tag: string; html: string }>
   changed?: Array<{ n: number; tag: string; changes: string[]; html?: string }>
+  removed?: Array<{ n: number; tag: string }>
+  noChange?: boolean
   truncated?: boolean
 }
 
@@ -575,8 +591,14 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
   ctx.tools.register(defineTool({
     name: 'form_click',
     description: 'Click any element by address: buttons, links, options, custom widgets. '
-      + 'A successful dispatch only means the event was sent — verify the result by observing again. '
-      + 'Set trusted true to synthesize a real mouse event through the debugger, for controls that ignore DOM clicks.',
+      + 'Prefer the default DOM click (it targets the element by address and works on most custom '
+      + 'dropdowns, including Ant Design overlays); only set trusted true to synthesize a real mouse '
+      + 'event through the debugger when a control ignores DOM clicks. '
+      + 'The readback carries hitsTarget/hit: false means the element\'s center was covered or off-screen, '
+      + 'so the click probably did nothing — right for revealing a blocked target, wrong for a real click. '
+      + 'A trusted click whose computed screen point is outside the viewport is refused with reason '
+      + 'point_offscreen rather than fired blindly (virtual lists place measurement phantoms far off-screen). '
+      + 'A successful dispatch only means the event was sent — verify with form_record / form_observe.',
     parameters: {
       n: { type: 'integer', required: true, description: 'Element address from the snapshot.' },
       frame: { type: 'integer', description: 'Frame id. Defaults to 0.' },
@@ -604,12 +626,17 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
   ctx.tools.register(defineTool({
     name: 'form_type',
     description: 'Focus an element (optional) and send real keystrokes via the debugger: text for autocomplete/date widgets, '
-      + 'or one special key (Enter, Tab, Escape, ArrowDown, ArrowUp, Backspace, Delete). '
-      + 'Use this when form_fill does not trigger a widget that listens for key events.',
+      + 'or a special key '
+      + '(Enter, Tab, Escape, ArrowDown, ArrowUp, Home, End, PageUp, PageDown, Backspace, Delete). '
+      + 'Use this when form_fill does not trigger a widget that listens for key events. '
+      + 'Set repeat to send the same key N times in one call — the fast way to walk a virtual-list dropdown '
+      + '(e.g. Home then ArrowDown repeat 14). When n targets a combobox/listbox, the readback\'s `actual` '
+      + 'carries activeOption {id, text, n}: the item currently highlighted, so you can confirm where the keys landed.',
     parameters: {
       n: { type: 'integer', description: 'Element address to focus first.' },
       text: { type: 'string', description: 'Text to type.' },
-      key: { type: 'string', description: 'One special key name.' },
+      key: { type: 'string', description: 'One special key name (Enter, Tab, Escape, ArrowDown, ArrowUp, Home, End, PageUp, PageDown, Backspace, Delete).' },
+      repeat: { type: 'integer', description: 'Send the special key this many times in one call (capped at 100). Defaults to 1.' },
       frame: { type: 'integer', description: 'Frame id. Defaults to 0.' },
       confirm: { type: 'boolean', description: 'Crop a confirmation screenshot (needs n). Defaults to true.' },
       ...TIMEOUT_PARAM,
@@ -624,7 +651,7 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
       }
       const frame = args.frame ?? 0
       const timeoutMs = requestedTimeout(args)
-      const result = await act(exec, { op: 'type', n: args.n, text: args.text, key: args.key, frame }, timeoutMs)
+      const result = await act(exec, { op: 'type', n: args.n, text: args.text, key: args.key, repeat: args.repeat, frame }, timeoutMs)
       const imageId = args.n !== undefined && args.confirm !== false
         ? await recordConfirm(exec, frame, args.n, '键入确认', timeoutMs)
         : undefined
@@ -653,9 +680,12 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
 
   ctx.tools.register(defineTool({
     name: 'form_scroll',
-    description: 'Scroll an element into view by address, or scroll the window to document row y.',
+    description: 'Scroll an element into view by address, scroll the window to document row y, '
+      + 'or — with n and dy — scroll the element\'s own scrollable container (a dropdown popup or virtual list) by dy pixels. '
+      + 'The dy form returns scrollTop/scrollHeight/clientHeight of the container so you can tell whether more content is in reach.',
     parameters: {
-      n: { type: 'integer', description: 'Element address to bring into view.' },
+      n: { type: 'integer', description: 'Element address to bring into view, or the element whose own container to scroll (with dy).' },
+      dy: { type: 'integer', description: 'With n: scroll the element\'s nearest scrollable container by this many pixels (positive = down).' },
       y: { type: 'integer', description: 'Document y to scroll the window to.' },
       frame: { type: 'integer', description: 'Frame id for n. Defaults to 0.' },
       ...TIMEOUT_PARAM,
@@ -666,7 +696,7 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
     },
     async execute(args, exec) {
       if (args.n === undefined && args.y === undefined) throw new Error('form_scroll 需要 n 或 y')
-      return act(exec, { op: 'scroll', n: args.n, y: args.y, frame: args.frame ?? 0 }, requestedTimeout(args))
+      return act(exec, { op: 'scroll', n: args.n, y: args.y, dy: args.dy, frame: args.frame ?? 0 }, requestedTimeout(args))
     },
   }))
 
@@ -822,7 +852,9 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
       + 'settleMs, or at maxWaitMs for pages that never stop animating. `ops` run in order; each op is one of the existing '
       + 'actions (fill, click, type, hover, scroll, upload, read), and nesting form_record is rejected. No '
       + 'confirmation screenshots are taken. If a frame reports truncated, the diff hit `limit` (or a huge subtree cap) — '
-      + 'narrow it with form_type to filter a virtual list, or form_scroll the popup and record again.',
+      + 'narrow it with form_type to filter a virtual list, or form_scroll the popup (n + dy) and record again. '
+      + 'Each frame also reports `removed` (elements that already had an address and disappeared — a popup closing, '
+      + 'a block vanishing) and a `noChange` flag, so a step that changed nothing is an explicit no-op, not three empty arrays.',
     parameters: {
       ops: {
         type: 'array', required: true,
@@ -839,6 +871,7 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
             value: { type: 'string', description: 'Value for fill.' },
             text: { type: 'string', description: 'Text for type.' },
             key: { type: 'string', description: 'Special key for type.' },
+            repeat: { type: 'integer', description: 'Repeat the special key this many times (for type).' },
             path: { type: 'string', description: 'Absolute path for upload.' },
             trusted: { type: 'boolean', description: 'Use a real (trusted) event via CDP, for click/hover.' },
             frame: { type: 'integer', description: 'Frame id for this op. Defaults to the record frame.' },
@@ -901,6 +934,19 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
                     },
                   },
                 },
+                removed: {
+                  type: 'array',
+                  description: 'Elements removed during the batch (only ones that already had an address). '
+                    + 'This is how a popup closing or a block disappearing shows up.',
+                  items: {
+                    type: 'object', additionalProperties: false,
+                    properties: {
+                      n: { type: 'integer', required: true },
+                      tag: { type: 'string', required: true },
+                    },
+                  },
+                },
+                noChange: { type: 'boolean', description: 'True when the batch left the DOM untouched — an explicit signal instead of three empty arrays.' },
               },
             },
           },
@@ -918,6 +964,7 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
         ...op.value === undefined ? {} : { value: op.value as string },
         ...op.text === undefined ? {} : { text: op.text as string },
         ...op.key === undefined ? {} : { key: op.key as string },
+        ...op.repeat === undefined ? {} : { repeat: op.repeat as number },
         ...op.path === undefined ? {} : { path: op.path as string },
         ...op.trusted === undefined ? {} : { trusted: op.trusted as boolean },
       }))

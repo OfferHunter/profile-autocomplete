@@ -45,6 +45,12 @@
     return el && el.isConnected ? el : null;
   }
 
+  // 只读查询：元素是否已经有过地址。与 nFor 不同，它**不分配**新地址 ——
+  // 被移除的节点若从没进过快照，给它一个新号码毫无意义（模型从没见过它）。
+  function numIfKnown(el) {
+    return numOf.get(el);
+  }
+
   // ---- 序列化 ----
 
   function escText(s) {
@@ -191,5 +197,5 @@
     };
   }
 
-  PA.dom = { snapshot, serialize, elementFor, nFor, N_ATTR };
+  PA.dom = { snapshot, serialize, elementFor, nFor, numIfKnown, N_ATTR };
 })();

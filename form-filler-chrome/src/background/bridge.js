@@ -123,7 +123,19 @@ async function trustedPointer(tabId, frame, n, kind) {
     const box = await cdp.viewportBox(tabId, nodeId);
     if (!box) return { ok: false, reason: 'not_interactable', message: '元素没有可交互的尺寸（未渲染或已隐藏）' };
     const point = cdp.centerOf(box);
-    return kind === 'click' ? await cdp.realClickAt(tabId, point) : await cdp.moveToPoint(tabId, point);
+    // 视口外就绝不派发：虚拟列表常用超大负偏移放"测量幽灵行"，getContentQuads 会如实
+    // 把它算成屏幕外的坐标；真事件打过去不但无效，还可能点空白误关浮层。宁可如实报错。
+    const size = await cdp.viewportSize(tabId);
+    if (size.width > 0 && (point.x < 0 || point.y < 0 || point.x > size.width || point.y > size.height)) {
+      return {
+        ok: false, reason: 'point_offscreen', point, box,
+        message: '元素算出的屏幕坐标在视口外（虚拟列表的测量幽灵行常见如此）；不派发以免误点。改用 trusted=false 的 DOM 点击，或先 form_scroll 把它滚进视野。',
+      };
+    }
+    // 命中自校验在点击前做（点击可能改变层叠，事后再测会误判）。它在该 frame 内跑。
+    const pre = await domAct(tabId, frame, { op: 'hit_test', n }).catch(() => null);
+    const result = kind === 'click' ? await cdp.realClickAt(tabId, point) : await cdp.moveToPoint(tabId, point);
+    return { ...result, ...pre && pre.ok ? { hitsTarget: pre.hitsTarget, hit: pre.hit } : {} };
   } finally {
     try { await domAct(tabId, frame, { op: 'unmark', mark: marked.mark }); } catch { /* 页面可能已导航 */ }
     await cdp.detach(tabId);
@@ -153,18 +165,22 @@ async function typeInto(tabId, frame, call) {
     const focused = await domAct(tabId, frame, { op: 'focus', n: call.n });
     if (focused.ok === false) return focused;
   }
+  // 一次连发同一个键 N 次（虚拟列表逐格移动）：省去 N 次往返，也让"步数"由模型
+  // 一次算准。上限 100，防手滑把列表翻穿。
+  const repeat = Number.isFinite(call.repeat) && call.repeat > 0 ? Math.min(Math.floor(call.repeat), 100) : 1;
   await cdp.attach(tabId);
   try {
     if (call.text) await cdp.typeText(tabId, call.text);
-    if (call.key) await cdp.pressKey(tabId, call.key);
+    if (call.key) for (let i = 0; i < repeat; i++) await cdp.pressKey(tabId, call.key);
   } finally {
     await cdp.detach(tabId);
   }
   if (call.n != null) {
+    // 回读走 read → readState，浮层控件会带上 activeOption（现在停在第几项）。
     const back = await domAct(tabId, frame, { op: 'read', n: call.n });
     return { ok: true, dispatched: true, actual: back.actual, box: back.box };
   }
-  return { ok: true, dispatched: true };
+  return { ok: true, dispatched: true, repeat };
 }
 
 async function uploadFile(tabId, frame, call) {
@@ -229,7 +245,7 @@ async function runAct(tabId, frame, call) {
   if (call.op === 'upload') return uploadFile(tabId, frame, call);
   // scan / fill_many 原样把整个 call 交给对应 frame 的 content script。
   if (call.op === 'scan' || call.op === 'fill_many') return domAct(tabId, frame, call);
-  if (DOM_OPS.has(call.op)) return domAct(tabId, frame, { op: call.op, n: call.n, value: call.value, y: call.y });
+  if (DOM_OPS.has(call.op)) return domAct(tabId, frame, { op: call.op, n: call.n, value: call.value, y: call.y, dy: call.dy });
   return { ok: false, reason: 'unknown_op', message: `不认识的动作 ${call.op}` };
 }
 

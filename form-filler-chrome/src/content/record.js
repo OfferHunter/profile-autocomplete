@@ -20,12 +20,14 @@
 
   let observer = null;
   let added = null;    // Set<Element>：新插入的元素
+  let removed = null;  // Set<Element>：被移除的元素
   let changed = null;  // Map<Element, Set<string>>：属性变更目标 → 改动的属性名
   let lastMutationAt = 0;
 
   function arm() {
     if (observer) observer.disconnect();
     added = new Set();
+    removed = new Set();
     changed = new Map();
     lastMutationAt = performance.now();
     observer = new MutationObserver(records => {
@@ -34,6 +36,11 @@
         if (r.type === 'childList') {
           for (const node of r.addedNodes) {
             if (node.nodeType === 1 && added.size < CAP) added.add(node);
+          }
+          // 浮层关闭、整块消失这类"只做减法"的变化全靠这里 —— 只收 additions 的
+          // 差分是有去无回的单向镜，看不到任何删除。
+          for (const node of r.removedNodes) {
+            if (node.nodeType === 1 && removed.size < CAP) removed.add(node);
           }
         } else if (r.type === 'attributes') {
           let names = changed.get(r.target);
@@ -123,7 +130,18 @@
       outChanged.push({ ...entry, html: text });
     }
 
-    return { ok: true, added: outAdded, changed: outChanged, truncated };
+    // 被移除的节点只报"模型已经有地址"的那些：给从没进过快照的节点发新地址毫无意义
+    // （模型从没见过它）。n 走只读查询，不新增地址。已被插回的（isConnected）不算移除。
+    const outRemoved = [];
+    for (const node of removed) {
+      if (node.isConnected) continue;
+      const n = typeof PA.dom.numIfKnown === 'function' ? PA.dom.numIfKnown(node) : undefined;
+      if (n === undefined) continue;
+      outRemoved.push({ n, tag: node.tagName.toLowerCase() });
+    }
+
+    const noChange = outAdded.length === 0 && outChanged.length === 0 && outRemoved.length === 0 && !truncated;
+    return { ok: true, added: outAdded, changed: outChanged, removed: outRemoved, truncated, noChange };
   }
 
   PA.record = { arm, collect };

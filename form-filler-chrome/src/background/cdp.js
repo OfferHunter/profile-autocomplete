@@ -242,6 +242,13 @@ export async function scrollOffset(tabId) {
   return { x: v ? v.pageX : 0, y: v ? v.pageY : 0 };
 }
 
+/** 顶层视口尺寸（CSS 像素）。给 trusted 点击判定"这个坐标还在屏幕上吗"用。 */
+export async function viewportSize(tabId) {
+  const m = await send(tabId, 'Page.getLayoutMetrics');
+  const v = m.cssLayoutViewport || m.layoutViewport;
+  return { width: v ? v.clientWidth : 0, height: v ? v.clientHeight : 0 };
+}
+
 /** 矩形中心（顶层视口坐标），四舍五入到整数像素。 */
 export function centerOf(box) {
   return { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2) };
@@ -279,13 +286,18 @@ export async function typeText(tabId, text) {
   return { ok: true, dispatched: true, inserted: text.length };
 }
 
-// 特殊键的 CDP 参数。只能给这几个——多一个都会引出"模型乱按键盘"的风险。
+// 特殊键的 CDP 参数。只放"导航 + 编辑"类，不放会触发提交/危险操作的键。
+// Home/End/PageUp/PageDown 是虚拟列表的快速定位手段：一个 End 抵十几次 ArrowDown。
 const KEYS = {
   Enter: { key: 'Enter', code: 'Enter', keyCode: 13, text: '\r' },
   Tab: { key: 'Tab', code: 'Tab', keyCode: 9 },
   Escape: { key: 'Escape', code: 'Escape', keyCode: 27 },
   ArrowDown: { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40 },
   ArrowUp: { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38 },
+  Home: { key: 'Home', code: 'Home', keyCode: 36 },
+  End: { key: 'End', code: 'End', keyCode: 35 },
+  PageUp: { key: 'PageUp', code: 'PageUp', keyCode: 33 },
+  PageDown: { key: 'PageDown', code: 'PageDown', keyCode: 34 },
   Backspace: { key: 'Backspace', code: 'Backspace', keyCode: 8 },
   Delete: { key: 'Delete', code: 'Delete', keyCode: 46 },
 };

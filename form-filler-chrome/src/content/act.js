@@ -22,7 +22,7 @@
   }
 
   // 当前状态的统一读法。三种控件三种读法，但对外只暴露一个形状。
-  function readState(el) {
+  function baseState(el) {
     const tag = el.tagName;
     const base = { ...describe(el) };
     if (tag === 'INPUT') {
@@ -42,6 +42,86 @@
     }
     if (el.isContentEditable) return { ...base, value: (el.textContent || '').trim() };
     return { ...base, value: (el.textContent || '').trim(), text: (el.textContent || '').trim().slice(0, 200) };
+  }
+
+  // 是不是一个"浮层选择控件"（自定义下拉/级联/虚拟列表）。只有这类元素才去解析
+  // 活动项——普通文本框读法一个字不变、零额外开销。判定全按 ARIA，不做任何猜测。
+  function popupish(el) {
+    if (el.getAttribute('aria-activedescendant')) return true;
+    const role = (el.getAttribute('role') || '').toLowerCase();
+    if (role === 'combobox' || role === 'listbox') return true;
+    return !!(el.closest && el.closest('[role=combobox],[role=listbox],[aria-activedescendant]'));
+  }
+
+  // 按 id 取节点。id 可能不是合法选择器，所以优先用 getElementById（不做选择器解析）。
+  function byId(el, id) {
+    const root = el.getRootNode ? el.getRootNode() : document;
+    try { if (root.getElementById) { const o = root.getElementById(id); if (o) return o; } } catch { /* shadow 根没有 getElementById */ }
+    try { return document.getElementById(id); } catch { return null; }
+  }
+
+  function optionInfo(o) {
+    return {
+      id: o.id || null,
+      text: norm(o.textContent).slice(0, 200),
+      ...(PA.dom && typeof PA.dom.nFor === 'function' ? { n: PA.dom.nFor(o) } : {}),
+    };
+  }
+
+  // 键盘导航下"当前高亮的是哪一项"。焦点留在 combobox 上，高亮项靠
+  // aria-activedescendant 指向的 id 标记（每按一次方向键就换一个 id）——这是页面
+  // 自己写的事实，本地只是把它翻译成文字，不猜、不裁决。主通道认这个属性（自身或
+  // 邻近祖先上），兜底认 listbox 里 aria-selected=true 的项；都没有则返回 null。
+  function activeOptionOf(el) {
+    let scope = el;
+    for (let hops = 0; scope && hops < 6; scope = scope.parentElement, hops++) {
+      const ad = scope.getAttribute && scope.getAttribute('aria-activedescendant');
+      if (ad) {
+        const o = byId(el, ad);
+        if (o) return optionInfo(o);
+      }
+    }
+    const role = (el.getAttribute('role') || '').toLowerCase();
+    const listbox = role === 'listbox' ? el : (el.querySelector ? el.querySelector('[role=listbox]') : null);
+    const holder = listbox || el;
+    const selected = holder.querySelector ? holder.querySelector('[role=option][aria-selected=true]') : null;
+    return selected ? optionInfo(selected) : null;
+  }
+
+  // 对外统一读法：在基础状态上，给浮层控件补一个 activeOption。三种控件三种读法
+  // 的形状不变，只是列表类多带"停在第几项"。
+  function readState(el) {
+    const st = baseState(el);
+    if (popupish(el)) {
+      const active = activeOptionOf(el);
+      if (active) return { ...st, activeOption: active };
+    }
+    return st;
+  }
+
+  // 该元素中心点实际命中谁：把"点了等于没点"从静默失败变成可诊断结果。目标被弹窗
+  // 遮罩盖住、或元素本身零尺寸/被幽灵定位（虚拟列表用超大负偏移测量）时，
+  // hitsTarget 会是 false。在元素自己的 frame 里跑，坐标即该 frame 的视口坐标。
+  function hitTest(el) {
+    const r = el.getBoundingClientRect();
+    const p = { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    // 优先在元素自己的根节点里测命中：shadow root 内用顶层 document 测会被重定向到宿主，
+    // 从而把"点中了内部节点"误判成"没命中"。
+    const root = el.getRootNode ? el.getRootNode() : document;
+    let hit = null;
+    try {
+      hit = root.elementFromPoint ? root.elementFromPoint(p.x, p.y) : document.elementFromPoint(p.x, p.y);
+    } catch { /* 分离节点或坐标非法 */ }
+    const hitsTarget = !!(hit && (hit === el || el.contains(hit) || hit.contains(el)));
+    return {
+      hitsTarget,
+      hit: hit ? {
+        tag: hit.tagName.toLowerCase(),
+        id: hit.id || null,
+        text: norm(hit.textContent).slice(0, 80),
+        ...(PA.dom && typeof PA.dom.nFor === 'function' ? { n: PA.dom.nFor(hit) } : {}),
+      } : null,
+    };
   }
 
   // React 等框架在 value 上装了 setter，直接 `el.value = v` 会被它自己的渲染流程
@@ -231,9 +311,11 @@
     try {
       // 先滚动到视野内再点：scrollIntoView 会改变 scrollY，所以 box 必须在点完之后再取。
       r.el.scrollIntoView({ block: 'center' });
+      // 命中自校验在点击前做：点击可能关掉浮层，事后再测就把"点中了"误报成"没点中"。
+      const hit = hitTest(r.el);
       if (typeof r.el.click === 'function') r.el.click();
       else r.el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, view: window }));
-      return { ok: true, dispatched: true, actual: readState(r.el), box: boxOf(r.el) };
+      return { ok: true, dispatched: true, actual: readState(r.el), box: boxOf(r.el), ...hit };
     } catch (e) {
       return { ok: false, reason: 'exception', message: String((e && e.message) || e) };
     }
@@ -289,9 +371,29 @@
     }
   }
 
-  // 滚动：给 n 就把元素滚到视野中央，给 y 就滚窗口。只汇报真实 scrollY，不做别的判断。
-  function scroll(n, y) {
+  // 元素自身/最近祖先里那个真正可滚的容器（虚拟列表的 holder）。窗口滚动不算。
+  function scrollContainerOf(el) {
+    for (let e = el; e; e = e.parentElement) {
+      let cs;
+      try { cs = getComputedStyle(e); } catch { break; }
+      if (e.scrollHeight - e.clientHeight > 1 && /(auto|scroll|overlay)/.test(cs.overflowY)) return e;
+    }
+    return null;
+  }
+
+  // 滚动：给 n+dy 就滚该元素所在的内部容器（浮层/虚拟列表），给 n 就滚到视野中央，
+  // 给 y 就滚窗口。如实汇报真实的滚动结果，不做别的判断。
+  function scroll(n, y, dy) {
     try {
+      if (n != null && dy != null) {
+        const r = resolve(n);
+        if (r.error) return { ok: false, reason: 'stale_address', message: r.error };
+        const c = scrollContainerOf(r.el);
+        if (!c) return { ok: false, reason: 'no_scroll_container', message: '该元素没有可滚动的内部容器；滚窗口请用 y。' };
+        const max = Math.max(0, c.scrollHeight - c.clientHeight);
+        c.scrollTop = Math.max(0, Math.min(c.scrollTop + dy, max));
+        return { ok: true, scrolled: dy, scrollTop: Math.round(c.scrollTop), scrollHeight: c.scrollHeight, clientHeight: c.clientHeight };
+      }
       if (n != null) {
         const r = resolve(n);
         if (r.error) return { ok: false, reason: 'stale_address', message: r.error };
@@ -299,7 +401,7 @@
       } else if (y != null) {
         window.scrollTo({ top: Math.max(0, y) });
       } else {
-        return { ok: false, reason: 'bad_call', message: 'scroll 需要 n 或 y' };
+        return { ok: false, reason: 'bad_call', message: 'scroll 需要 n（可选 +dy）或 y' };
       }
       return { ok: true, scrollY: window.scrollY };
     } catch (e) {
@@ -349,7 +451,12 @@
       case 'hover':
         return hover(call.n);
       case 'scroll':
-        return scroll(call.n, call.y);
+        return scroll(call.n, call.y, call.dy);
+      case 'hit_test': {
+        const r = resolve(call.n);
+        if (r.error) return { ok: false, reason: 'stale_address', message: r.error };
+        return { ok: true, ...hitTest(r.el) };
+      }
       case 'mark':
         return mark(call.n);
       case 'unmark':
@@ -359,5 +466,5 @@
     }
   }
 
-  PA.act = { dispatch, fill, fillMany, click, read, box, readState, matchOption, stateValue };
+  PA.act = { dispatch, fill, fillMany, click, read, box, readState, matchOption, stateValue, activeOptionOf, hitTest };
 })();
