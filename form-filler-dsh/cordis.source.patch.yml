@@ -10,6 +10,7 @@
 #   runDir: runs                  # relative to the session working directory
 #   knowledgeDir: knowledge       # relative to the session working directory
 #   attachmentsDir: attachments   # relative to the session working directory
+#   cropSlotSize: 20              # component crops kept in the injected image memory
 #
 # All three directories are relative: they resolve under the session working
 # directory, which is also the file sandbox's workspace-write boundary. Point

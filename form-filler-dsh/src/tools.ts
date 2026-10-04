@@ -17,9 +17,11 @@ import type { Context } from '@deepseek-ai/cordis'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+import type { Session } from '@deepseek-ai/dsh-session'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import type { Bridge, ActResult, ObserveResult, ShotResult } from './bridge.ts'
+import type { ImageMemory } from './image-memory.ts'
 
 /** One frame's file index in a `form_observe` result. */
 interface FrameIndex {
@@ -40,19 +42,6 @@ interface ImageValue {
   name?: string
 }
 
-const IMAGE_VALUE_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    attachmentId: { type: 'string', required: true },
-    mediaType: { type: 'string', enum: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'], required: true },
-    bytes: { type: 'integer', required: true },
-    width: { type: 'integer', required: true },
-    height: { type: 'integer', required: true },
-    name: { type: 'string' },
-  },
-} as const
-
 /** The readback fields every element-targeted action shares. */
 const ACT_RESULT_PROPERTIES = {
   ok: { type: 'boolean', required: true },
@@ -61,6 +50,9 @@ const ACT_RESULT_PROPERTIES = {
   dispatched: { type: 'boolean' },
   actual: { type: 'json' },
   box: { type: 'json' },
+  // The id of the screenshot this action recorded into the image memory, when
+  // one was taken; absent when no store is mounted or confirmation is off.
+  imageId: { type: 'integer' },
   matchedOption: {
     type: 'object',
     additionalProperties: false,
@@ -90,16 +82,10 @@ const ACT_RESULT_SCHEMA = {
   properties: { ...ACT_RESULT_PROPERTIES },
 } as const
 
-const ACT_WITH_IMAGE_SCHEMA = {
+const ACT_WITH_ATTEMPT_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  properties: { ...ACT_RESULT_PROPERTIES, image: IMAGE_VALUE_SCHEMA },
-} as const
-
-const ACT_WITH_ATTEMPT_AND_IMAGE_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  properties: { ...ACT_RESULT_PROPERTIES, attempts: { type: 'integer' }, image: IMAGE_VALUE_SCHEMA },
+  properties: { ...ACT_RESULT_PROPERTIES, attempts: { type: 'integer' } },
 } as const
 
 const DEFAULT_MAX_WAIT_MS = 30_000
@@ -141,6 +127,8 @@ export interface ToolsOptions {
   bridge: Bridge
   /** Snapshot root, relative to the session working directory. */
   runDir: string
+  /** The image working set every screenshot is recorded into. */
+  memory: ImageMemory
 }
 
 /** One element-targeted action forwarded to the extension. */
@@ -207,24 +195,24 @@ function json(value: unknown): ContentBlock[] {
   return [{ type: 'text', text: JSON.stringify(value) }]
 }
 
-/** Render a value plus an optional confirmation image. */
-function jsonWithImage(visible: unknown, image: ImageValue | undefined): ContentBlock[] {
-  const blocks: ContentBlock[] = [{ type: 'text', text: JSON.stringify(visible) }]
-  if (image !== undefined) blocks.push({ type: 'image', attachment: imageRef(image) })
-  return blocks
-}
-
 /**
- * Register the twelve `form_*` tools on the plugin context.
+ * Register the fourteen `form_*` tools plus `drop_images` on the plugin context.
  * @param ctx - the plugin context carrying `ctx.tools`.
- * @param options - the bridge, the snapshot run directory, and the optional image store.
+ * @param options - the bridge, the snapshot run directory, and the image working set.
  */
 export function registerTools(ctx: Context, options: ToolsOptions): void {
-  const { bridge, runDir } = options
+  const { bridge, runDir, memory } = options
   // The frame index must hand the model absolute paths, so anchor the relative
   // run dir to the session working directory once here.
   const snapshotRoot = resolve(runDir)
   const sessions = new Map<string, SessionState>()
+
+  /** The session owning this tool call, required for recording images and pruning. */
+  const sessionOf = (exec: ToolExecution): Session => {
+    const session = (exec.agent as { session?: Session } | undefined)?.session
+    if (session === undefined) throw new Error('form-filler: 工具调用不在任何会话中，无法记录图像')
+    return session
+  }
 
   const stateOf = (exec: ToolExecution): SessionState => {
     const key = sessionKey(exec)
@@ -283,18 +271,26 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
     return result as ActResult
   }
 
-  /** Take a targeted confirmation screenshot of one element (Document coordinates). */
-  const confirmShot = async (
+  /**
+   * Take a targeted confirmation screenshot of one element (Document
+   * coordinates) and record it as a crop in the image memory, so the model
+   * verifies the write visually without the image riding the tool result.
+   * @returns the crop's id, or `undefined` when no store is mounted.
+   */
+  const recordConfirm = async (
     exec: ToolExecution,
     frame: number,
     n: number,
+    caption: string,
     timeoutMs?: number,
-  ): Promise<ImageValue | undefined> => {
+  ): Promise<number | undefined> => {
     const { browser, tabId } = targetOf(exec)
     const shot = await bridge.request(browser, 'shot', {
       tabId, view: { frame, n },
     }, exec.signal, timeoutMs) as ShotResult
-    return saveImage(shot.image, `field-${n}.png`)
+    const image = await saveImage(shot.image, `field-${n}.png`)
+    if (image === undefined) return undefined
+    return memory.recordCrop(sessionOf(exec), imageRef(image), `${caption} frame=${frame} n=${n}`)
   }
 
   ctx.tools.register(defineTool({
@@ -402,6 +398,7 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
           documentId: { type: 'string', required: true },
           snapshotId: { type: 'string', required: true },
           pageHeight: { type: 'integer', required: true },
+          imageId: { type: 'integer' },
           frames: {
             type: 'array', required: true,
             items: {
@@ -416,10 +413,9 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
               },
             },
           },
-          image: IMAGE_VALUE_SCHEMA,
         },
       },
-      render: (_args, value) => jsonWithImage({ ...value, image: undefined }, value.image),
+      render: (_args, value) => json(value),
     },
     async execute(args, exec) {
       const { browser, tabId, state } = targetOf(exec)
@@ -444,6 +440,14 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
         })
       }
       const image = await saveImage(observation.image, 'page.png')
+      let imageId: number | undefined
+      if (image !== undefined) {
+        const session = sessionOf(exec)
+        const ref = imageRef(image)
+        imageId = args.n === undefined
+          ? memory.recordFull(session, tabId, 0, ref, '整页观测')
+          : memory.recordCrop(session, ref, `frame=${args.frame ?? 0} n=${args.n} 局部观测`)
+      }
       state.frames = frames
       return {
         url: observation.url,
@@ -451,8 +455,8 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
         documentId: observation.document,
         snapshotId: observation.snapshot,
         pageHeight: observation.pageHeight,
+        ...imageId === undefined ? {} : { imageId },
         frames,
-        ...image === undefined ? {} : { image },
       }
     },
   }))
@@ -473,10 +477,10 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
         properties: {
           clip: { type: 'object', additionalProperties: true, required: true },
           pageHeight: { type: 'integer', required: true },
-          image: IMAGE_VALUE_SCHEMA,
+          imageId: { type: 'integer' },
         },
       },
-      render: (_args, value) => jsonWithImage({ clip: value.clip, pageHeight: value.pageHeight }, value.image),
+      render: (_args, value) => json(value),
     },
     async execute(args, exec) {
       const { browser, tabId } = targetOf(exec)
@@ -484,7 +488,14 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
         tabId, view: { y: args.y, n: args.n, frame: args.frame },
       }, exec.signal, requestedTimeout(args)) as ShotResult
       const image = await saveImage(shot.image, 'look.png')
-      return { clip: shot.clip, pageHeight: shot.pageHeight, ...image === undefined ? {} : { image } }
+      let imageId: number | undefined
+      if (image !== undefined) {
+        const caption = args.n === undefined
+          ? `y=${args.y} 页面条带`
+          : `frame=${args.frame ?? 0} n=${args.n} 局部查看`
+        imageId = memory.recordCrop(sessionOf(exec), imageRef(image), caption)
+      }
+      return { clip: shot.clip, pageHeight: shot.pageHeight, ...imageId === undefined ? {} : { imageId } }
     },
   }))
 
@@ -519,8 +530,8 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
       ...TIMEOUT_PARAM,
     },
     output: {
-      schema: ACT_WITH_ATTEMPT_AND_IMAGE_SCHEMA,
-      render: (_args, value) => jsonWithImage({ ...value, image: undefined }, value.image),
+      schema: ACT_WITH_ATTEMPT_SCHEMA,
+      render: (_args, value) => json(value),
     },
     async execute(args, exec) {
       const frame = args.frame ?? 0
@@ -528,8 +539,10 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
       const result = await act(exec, { op: 'fill', n: args.n, value: args.value, frame }, timeoutMs)
       const state = stateOf(exec)
       const attempts = result.ok ? undefined : recordAttempt(state, `fill:${frame}:${args.n}`)
-      const image = result.ok && args.confirm !== false ? await confirmShot(exec, frame, args.n, timeoutMs) : undefined
-      return { ...result, ...attempts === undefined ? {} : { attempts }, ...image === undefined ? {} : { image } }
+      const imageId = result.ok && args.confirm !== false
+        ? await recordConfirm(exec, frame, args.n, '写入确认', timeoutMs)
+        : undefined
+      return { ...result, ...attempts === undefined ? {} : { attempts }, ...imageId === undefined ? {} : { imageId } }
     },
   }))
 
@@ -546,8 +559,8 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
       ...TIMEOUT_PARAM,
     },
     output: {
-      schema: ACT_WITH_ATTEMPT_AND_IMAGE_SCHEMA,
-      render: (_args, value) => jsonWithImage({ ...value, image: undefined }, value.image),
+      schema: ACT_WITH_ATTEMPT_SCHEMA,
+      render: (_args, value) => json(value),
     },
     async execute(args, exec) {
       const frame = args.frame ?? 0
@@ -555,8 +568,10 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
       const result = await act(exec, { op: 'click', n: args.n, frame, trusted: args.trusted === true }, timeoutMs)
       const state = stateOf(exec)
       const attempts = result.ok ? undefined : recordAttempt(state, `click:${frame}:${args.n}`)
-      const image = result.ok && args.confirm !== false ? await confirmShot(exec, frame, args.n, timeoutMs) : undefined
-      return { ...result, ...attempts === undefined ? {} : { attempts }, ...image === undefined ? {} : { image } }
+      const imageId = result.ok && args.confirm !== false
+        ? await recordConfirm(exec, frame, args.n, '点击确认', timeoutMs)
+        : undefined
+      return { ...result, ...attempts === undefined ? {} : { attempts }, ...imageId === undefined ? {} : { imageId } }
     },
   }))
 
@@ -574,8 +589,8 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
       ...TIMEOUT_PARAM,
     },
     output: {
-      schema: ACT_WITH_IMAGE_SCHEMA,
-      render: (_args, value) => jsonWithImage({ ...value, image: undefined }, value.image),
+      schema: ACT_RESULT_SCHEMA,
+      render: (_args, value) => json(value),
     },
     async execute(args, exec) {
       if ((args.text === undefined || args.text === '') && (args.key === undefined || args.key === '')) {
@@ -584,9 +599,10 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
       const frame = args.frame ?? 0
       const timeoutMs = requestedTimeout(args)
       const result = await act(exec, { op: 'type', n: args.n, text: args.text, key: args.key, frame }, timeoutMs)
-      const image = args.n !== undefined && args.confirm !== false
-        ? await confirmShot(exec, frame, args.n, timeoutMs) : undefined
-      return { ...result, ...image === undefined ? {} : { image } }
+      const imageId = args.n !== undefined && args.confirm !== false
+        ? await recordConfirm(exec, frame, args.n, '键入确认', timeoutMs)
+        : undefined
+      return { ...result, ...imageId === undefined ? {} : { imageId } }
     },
   }))
 
@@ -825,6 +841,42 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
         for (const item of back.results ?? []) results.push({ frame, ...item })
       }
       return { results }
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'drop_images',
+    description: 'Release images from the injected image memory by their ids (the 【id=N】 labels). '
+      + 'Use it when a screenshot is no longer needed — a finished section, an already-verified write — to free context. '
+      + 'The images reappear only if a later observation records them again; the DOM snapshot files stay on disk either way.',
+    parameters: {
+      ids: {
+        type: 'array', required: true,
+        description: 'Image ids to drop, as shown in the image-memory panel captions.',
+        items: { type: 'integer' },
+      },
+    },
+    output: {
+      schema: {
+        type: 'object', additionalProperties: false,
+        properties: {
+          dropped: { type: 'integer', required: true },
+          remaining: {
+            type: 'object', additionalProperties: false,
+            properties: {
+              full: { type: 'integer', required: true },
+              crops: { type: 'integer', required: true },
+            },
+          },
+        },
+      },
+      render: (_args, value) => json(value),
+    },
+    // oxlint-disable-next-line typescript/require-await -- the tool execute contract returns a Promise
+    async execute(args, exec) {
+      const session = sessionOf(exec)
+      const dropped = memory.drop(session, args.ids)
+      return { dropped, remaining: memory.summary(session) }
     },
   }))
 }

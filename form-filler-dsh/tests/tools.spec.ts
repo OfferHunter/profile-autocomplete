@@ -14,12 +14,16 @@ import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import { Bridge } from '../src/bridge.ts'
+import { ImageMemory } from '../src/image-memory.ts'
 import { registerTools } from '../src/tools.ts'
 import { connectExtension, freePort, type CommandMessage, type FakeExtension } from './harness.ts'
 
 const TAB = { id: 7, url: 'https://jobs.example.com/apply', title: '在线申请' }
 const PNG = 'iVBORw0KGgo='
 const CLIP = { x: 0, y: 0, width: 800, height: 600 }
+
+/** A minimal session stub: the image memory keys on `id` and scans `surface.nodes`. */
+const SESSION = { id: 'session-a', surface: { nodes: [] as number[] } }
 
 const FRAME0 = {
   frameId: 0, documentId: 'top-doc-1', frameUrl: TAB.url, title: TAB.title,
@@ -34,8 +38,8 @@ let root: string | undefined
 let context: Context | undefined
 let bridge: Bridge | undefined
 let extension: FakeExtension | undefined
+let memory: ImageMemory | undefined
 let callCounter = 0
-let stubName: string | undefined = 'stub.png'
 let observeImage = PNG
 let shotImage = PNG
 let observeFrames: unknown[] = [FRAME0]
@@ -72,7 +76,6 @@ const attachmentsStub = {
       bytes: input.data.length,
       width: 10,
       height: 20,
-      ...stubName === undefined ? {} : { name: stubName },
     } as never
   },
 }
@@ -84,10 +87,10 @@ afterEach(async () => {
   context = undefined
   await bridge?.stop()
   bridge = undefined
+  memory = undefined
   if (root !== undefined) await rm(root, { recursive: true, force: true })
   root = undefined
   callCounter = 0
-  stubName = 'stub.png'
   observeImage = PNG
   shotImage = PNG
   observeFrames = [FRAME0]
@@ -106,7 +109,8 @@ async function boot(options: { attachments?: boolean; observeDelayMs?: number } 
   await context.plugin(SystemPrompt)
   await context.plugin(ToolRuntime)
   if (options.attachments === true) context.provide('attachments', attachmentsStub)
-  registerTools(context, { bridge: instance, runDir: join(root, 'runs') })
+  memory = new ImageMemory('form-filler', { cropSlotSize: 20 })
+  registerTools(context, { bridge: instance, runDir: join(root, 'runs'), memory })
 
   extension = await connectExtension({
     port, browser: 'browser-a', tabs: [TAB],
@@ -141,7 +145,7 @@ function call(name: string, args: unknown, options: { agent?: unknown; signal?: 
     callId: ToolCallId(`call-${++callCounter}`),
     name,
     arguments: args,
-    agent: (options.agent ?? { session: { id: 'session-a' } }) as never,
+    agent: (options.agent ?? { session: SESSION }) as never,
   })
 }
 
@@ -155,39 +159,63 @@ async function attachAndObserve(): Promise<void> {
 }
 
 describe('form-filler tools with an attachment store', () => {
-  it('carries saved images through observe, look, fill, type, and click', async () => {
+  it('routes every screenshot into the image memory instead of the tool result', async () => {
     await boot({ attachments: true })
     await attachAndObserve()
 
-    const observed = await call('form_observe', {})
-    const observedImage = value(observed).image as Record<string, unknown>
-    expect(observedImage).toEqual({
-      attachmentId: 'att-1', mediaType: 'image/png', bytes: 8, width: 10, height: 20, name: 'stub.png',
-    })
+    // A full-page observe occupies the full slot, never the crop ring, and
+    // reports the id it recorded (attachAndObserve already took id 1).
+    expect(memory!.summary(SESSION as never)).toEqual({ full: 1, crops: 0 })
+    const observed = value(await call('form_observe', {}))
+    expect(observed).not.toHaveProperty('image')
+    expect(observed.imageId).toBe(2)
 
-    // A saveImage whose ref carries no name omits it from the image value.
-    stubName = undefined
-    const looked = await call('form_look', { n: 3 })
-    expect(value(looked).image).toEqual({ attachmentId: 'att-1', mediaType: 'image/png', bytes: 8, width: 10, height: 20 })
+    // form_look records a crop and reports its id.
+    expect(value(await call('form_look', { n: 3 })).imageId).toBe(3)
+    expect(memory!.summary(SESSION as never)).toEqual({ full: 1, crops: 1 })
 
-    // An empty image payload is dropped entirely.
-    stubName = 'stub.png'
+    // An empty image payload records nothing and reports no id.
     shotImage = ''
-    expect(value(await call('form_look', { n: 3 })).image).toBeUndefined()
+    expect(value(await call('form_look', { n: 3 }))).not.toHaveProperty('imageId')
+    expect(memory!.summary(SESSION as never)).toEqual({ full: 1, crops: 1 })
     shotImage = PNG
 
-    // A fill crops a confirmation shot by default and skips it on confirm:false.
-    expect(value(await call('form_fill', { n: 3, value: '张三' })).image).toBeDefined()
-    expect(value(await call('form_fill', { n: 3, value: '张三', confirm: false })).image).toBeUndefined()
+    // A fill crops a confirmation shot by default and reports its id; it skips
+    // both the shot and the id on confirm:false.
+    expect(value(await call('form_fill', { n: 3, value: '张三' })).imageId).toBe(4)
+    expect(memory!.summary(SESSION as never).crops).toBe(2)
+    expect(value(await call('form_fill', { n: 3, value: '张三', confirm: false }))).not.toHaveProperty('imageId')
+    expect(memory!.summary(SESSION as never).crops).toBe(2)
 
     // form_type crops around n when given, and never without one.
-    expect(value(await call('form_type', { text: '张', n: 3 })).image).toBeDefined()
-    expect(value(await call('form_type', { text: '张' })).image).toBeUndefined()
+    await call('form_type', { text: '张', n: 3 })
+    expect(memory!.summary(SESSION as never).crops).toBe(3)
+    await call('form_type', { text: '张' })
+    expect(memory!.summary(SESSION as never).crops).toBe(3)
 
-    // form_click mirrors fill: image by default, attempts only on failure.
-    expect(value(await call('form_click', { n: 5 })).image).toBeDefined()
+    // form_click mirrors fill: crops on success, counts attempts on failure.
+    await call('form_click', { n: 5 })
+    expect(memory!.summary(SESSION as never).crops).toBe(4)
     actReply = { ok: true, result: { ok: false, reason: 'no-op' } }
     expect(value(await call('form_click', { n: 5, frame: 2 }))).toMatchObject({ attempts: 1, ok: false })
+    expect(memory!.summary(SESSION as never).crops).toBe(4)
+  })
+
+  it('drop_images releases recorded images by id and reports what remains', async () => {
+    await boot({ attachments: true })
+    await attachAndObserve()
+    await call('form_look', { n: 3 })
+    await call('form_fill', { n: 3, value: '张三' })
+
+    // Ids are handed out in record order: full-page 1, look crop 2, fill crop 3.
+    expect(value(await call('drop_images', { ids: [2] })))
+      .toEqual({ dropped: 1, remaining: { full: 1, crops: 1 } })
+    // Dropping an id nothing holds is a no-op.
+    expect(value(await call('drop_images', { ids: [99] })))
+      .toEqual({ dropped: 0, remaining: { full: 1, crops: 1 } })
+    // The full-page shot is droppable too.
+    expect(value(await call('drop_images', { ids: [1, 3] })))
+      .toEqual({ dropped: 2, remaining: { full: 0, crops: 0 } })
   })
 
   it('handles attach mismatches, agent-less sessions, frames, and aborts', async () => {

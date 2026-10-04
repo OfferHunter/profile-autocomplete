@@ -138,8 +138,9 @@ describe('form-filler real Loader composition through cordis.yml', () => {
 
     // --- tool schemas are model-visible -----------------------------------
     expect(context!.tools.schemas().map(schema => schema.name).sort()).toEqual([
-      'form_attach', 'form_click', 'form_fill', 'form_hover', 'form_look', 'form_observe',
-      'form_read', 'form_scroll', 'form_tabs', 'form_type', 'form_upload', 'form_wait',
+      'drop_images', 'form_attach', 'form_click', 'form_fill', 'form_fill_batch', 'form_hover',
+      'form_look', 'form_observe', 'form_read', 'form_scan', 'form_scroll', 'form_tabs',
+      'form_type', 'form_upload', 'form_wait',
     ])
 
     // --- prompt sections carry the rules and the profile ------------------

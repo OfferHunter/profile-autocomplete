@@ -4,8 +4,8 @@
  * the operating rules and the user's own profile injected as prompt context.
  *
  * The plugin carries no orchestration of its own — the harness agent loop
- * decides what to observe and fill. It owns only the bridge, the tools, and the
- * prompt sections. The browser extension keeps its existing wire protocol, so
+ * decides what to observe and fill. It owns only the bridge, the tools, the
+ * image working set, and the prompt sections. The browser extension keeps its existing wire protocol, so
  * its transport code needs no changes to talk to this plugin instead of the
  * retired Python backend.
  * @module @deepseek-ai/dsh-experimental-form-filler
@@ -14,6 +14,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { Bridge } from './bridge.ts'
+import { ImageMemory } from './image-memory.ts'
 import { registerPrompt } from './prompt.ts'
 import { registerTools } from './tools.ts'
 
@@ -43,6 +44,11 @@ export interface Config {
    * against the session working directory. @default 'attachments'
    */
   attachmentsDir?: string
+  /**
+   * How many component crops the injected image memory retains before the
+   * oldest is evicted. @default 20
+   */
+  cropSlotSize?: number
 }
 
 /** Schemastery config for the form-filling plugin. */
@@ -52,6 +58,7 @@ export const Config: z<Config> = z.object({
   runDir: z.string(),
   knowledgeDir: z.string(),
   attachmentsDir: z.string(),
+  cropSlotSize: z.number().min(1).step(1).default(20),
 })
 
 /** Concrete config after defaults are applied. */
@@ -61,6 +68,7 @@ export interface ResolvedConfig {
   runDir: string
   knowledgeDir: string
   attachmentsDir: string
+  cropSlotSize: number
 }
 
 /**
@@ -77,6 +85,7 @@ export function resolveConfig(config: Config): ResolvedConfig {
     runDir: config.runDir ?? 'runs',
     knowledgeDir: config.knowledgeDir ?? 'knowledge',
     attachmentsDir: config.attachmentsDir ?? 'attachments',
+    cropSlotSize: config.cropSlotSize ?? 20,
   }
 }
 
@@ -87,6 +96,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   await bridge.start()
   ctx.logger.info(`form-filler: bridge listening on ${resolved.host}:${bridge.port}`)
 
-  registerTools(ctx, { bridge, runDir: resolved.runDir })
+  const memory = new ImageMemory(name, { cropSlotSize: resolved.cropSlotSize })
+  memory.install(ctx)
+
+  registerTools(ctx, { bridge, runDir: resolved.runDir, memory })
   registerPrompt(ctx, { knowledgeDir: resolved.knowledgeDir, attachmentsDir: resolved.attachmentsDir })
 }
