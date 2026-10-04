@@ -57,6 +57,12 @@ form-filler-chrome/        浏览器扩展（感知与操作）
     sidepanel.html/.css/.js 侧边栏：连接设置、状态、标签页列表
     connection.js          面板 ↔ 后台的端口通道
     diagnostics.js         清单版本自检
+  tests/                   测试
+    bridge-message.mjs     桥接消息链路的回归测试（纯 JS，无依赖）
+    verify-dom/scan/extension.mjs  puppeteer 驱动本机 Edge 的集成测试
+    iframe-probe.mjs       iframe CDP 能力的回归探针
+    serve.mjs / fixture.html  手测夹具与静态服务
+    local/                 本地保存的真实站点等大体积夹具（被 .gitignore 忽略）
 form-filler-dsh/           DSH 插件（模型、知识库、任务编排），经 --patch 绝对路径加载，不再挂回 deepseek-harness
 ```
 
@@ -71,7 +77,9 @@ form-filler-dsh/           DSH 插件（模型、知识库、任务编排），�
 
 ## 测试
 
-桥接回归测试是纯 JavaScript，无第三方依赖：
+全部测试都在 `form-filler-chrome/tests/`。
+
+桥接回归测试是纯 JavaScript，无第三方依赖，也是 `npm test` 唯一会跑的：
 
 ```bash
 node tests/bridge-message.mjs
@@ -80,3 +88,8 @@ npm test
 ```
 
 它覆盖：清单版本自检、面板消息来源判定、后台冷启动期间请求排队、初始化失败上报。
+
+其余是**需要本机 Edge 的手动集成测试/探针**（不进 `npm test`）：`verify-dom.mjs`（dom/act 快照与动作）、
+`verify-scan.mjs`（scan 枚举与批量写）、`verify-extension.mjs`（把扩展真正装进 Edge 走完整链路）、
+`iframe-probe.mjs`（iframe 的 CDP 能力）。手测某页时可 `node tests/serve.mjs` 起静态服务、
+浏览 `http://127.0.0.1:8080/fixture.html`。

@@ -111,6 +111,15 @@ const TIMEOUT_PARAM = {
   },
 } as const
 
+/** Pre-screenshot settle wait, shared by every tool that captures an image (the crop/overview delay). */
+const SETTLE_PARAM = {
+  settleMs: {
+    type: 'integer',
+    description: 'Milliseconds to wait for the UI to settle (CSS transitions, expanding popups) before capturing '
+      + 'the screenshot. Raise it for slow-animating controls. Defaults to 400.',
+  },
+} as const
+
 /** Caps the model-requested deadline so a stray value cannot stall the agent loop. */
 const MAX_TIMEOUT_MS = 120_000
 
@@ -170,6 +179,7 @@ interface ActCall {
   ops?: ActCall[] | undefined
   settleMs?: number | undefined
   maxWaitMs?: number | undefined
+  opDelayMs?: number | undefined
 }
 
 /** One per-frame diff returned by `record`: new subtrees, attribute changes, and removals. */
@@ -325,10 +335,11 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
     n: number,
     caption: string,
     timeoutMs?: number,
+    settleMs?: number,
   ): Promise<number | undefined> => {
     const { browser, tabId } = targetOf(exec)
     const shot = await bridge.request(browser, 'shot', {
-      tabId, view: { frame, n },
+      tabId, view: { frame, n, settleMs },
     }, exec.signal, timeoutMs) as ShotResult
     const image = await saveImage(shot.image, `field-${n}.png`)
     if (image === undefined) return undefined
@@ -429,6 +440,7 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
       y: { type: 'integer', description: 'Document y offset to screenshot from, for content further down.' },
       n: { type: 'integer', description: 'Element address to crop around (with frame).' },
       frame: { type: 'integer', description: 'Frame id for n. Defaults to 0 (top document).' },
+      ...SETTLE_PARAM,
       ...TIMEOUT_PARAM,
     },
     output: {
@@ -462,7 +474,7 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
     async execute(args, exec) {
       const { browser, tabId, state } = targetOf(exec)
       const observation = await bridge.request(browser, 'observe', {
-        tabId, view: { y: args.y, n: args.n, frame: args.frame },
+        tabId, view: { y: args.y, n: args.n, frame: args.frame, settleMs: args.settleMs },
       }, exec.signal, requestedTimeout(args)) as ObserveResult
       state.snapshotId = observation.snapshot
 
@@ -511,6 +523,7 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
       y: { type: 'integer', description: 'Document y offset to screenshot from.' },
       n: { type: 'integer', description: 'Element address to crop around (with frame).' },
       frame: { type: 'integer', description: 'Frame id for n. Defaults to 0.' },
+      ...SETTLE_PARAM,
       ...TIMEOUT_PARAM,
     },
     output: {
@@ -527,7 +540,7 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
     async execute(args, exec) {
       const { browser, tabId } = targetOf(exec)
       const shot = await bridge.request(browser, 'shot', {
-        tabId, view: { y: args.y, n: args.n, frame: args.frame },
+        tabId, view: { y: args.y, n: args.n, frame: args.frame, settleMs: args.settleMs },
       }, exec.signal, requestedTimeout(args)) as ShotResult
       const image = await saveImage(shot.image, 'look.png')
       let imageId: number | undefined
@@ -569,6 +582,7 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
       value: { type: 'string', required: true, description: 'The value to write; "true"/"false" for checkbox/radio.' },
       frame: { type: 'integer', description: 'Frame id. Defaults to 0.' },
       confirm: { type: 'boolean', description: 'Crop a confirmation screenshot of the field. Defaults to true.' },
+      ...SETTLE_PARAM,
       ...TIMEOUT_PARAM,
     },
     output: {
@@ -582,7 +596,7 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
       const state = stateOf(exec)
       const attempts = result.ok ? undefined : recordAttempt(state, `fill:${frame}:${args.n}`)
       const imageId = result.ok && args.confirm !== false
-        ? await recordConfirm(exec, frame, args.n, '写入确认', timeoutMs)
+        ? await recordConfirm(exec, frame, args.n, '写入确认', timeoutMs, args.settleMs)
         : undefined
       return { ...result, ...attempts === undefined ? {} : { attempts }, ...imageId === undefined ? {} : { imageId } }
     },
@@ -604,6 +618,7 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
       frame: { type: 'integer', description: 'Frame id. Defaults to 0.' },
       trusted: { type: 'boolean', description: 'Use a real (trusted) mouse event via CDP. Defaults to false.' },
       confirm: { type: 'boolean', description: 'Crop a confirmation screenshot. Defaults to true.' },
+      ...SETTLE_PARAM,
       ...TIMEOUT_PARAM,
     },
     output: {
@@ -617,7 +632,7 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
       const state = stateOf(exec)
       const attempts = result.ok ? undefined : recordAttempt(state, `click:${frame}:${args.n}`)
       const imageId = result.ok && args.confirm !== false
-        ? await recordConfirm(exec, frame, args.n, '点击确认', timeoutMs)
+        ? await recordConfirm(exec, frame, args.n, '点击确认', timeoutMs, args.settleMs)
         : undefined
       return { ...result, ...attempts === undefined ? {} : { attempts }, ...imageId === undefined ? {} : { imageId } }
     },
@@ -639,6 +654,7 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
       repeat: { type: 'integer', description: 'Send the special key this many times in one call (capped at 100). Defaults to 1.' },
       frame: { type: 'integer', description: 'Frame id. Defaults to 0.' },
       confirm: { type: 'boolean', description: 'Crop a confirmation screenshot (needs n). Defaults to true.' },
+      ...SETTLE_PARAM,
       ...TIMEOUT_PARAM,
     },
     output: {
@@ -653,7 +669,7 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
       const timeoutMs = requestedTimeout(args)
       const result = await act(exec, { op: 'type', n: args.n, text: args.text, key: args.key, repeat: args.repeat, frame }, timeoutMs)
       const imageId = args.n !== undefined && args.confirm !== false
-        ? await recordConfirm(exec, frame, args.n, '键入确认', timeoutMs)
+        ? await recordConfirm(exec, frame, args.n, '键入确认', timeoutMs, args.settleMs)
         : undefined
       return { ...result, ...imageId === undefined ? {} : { imageId } }
     },
@@ -850,7 +866,9 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
       + 'the whole page after every step" pattern. It is pure perception — nothing is pre-classified as an option or a '
       + 'field, you judge from the returned HTML. Detection is quiescence-based: it returns once the DOM has been still for '
       + 'settleMs, or at maxWaitMs for pages that never stop animating. `ops` run in order; each op is one of the existing '
-      + 'actions (fill, click, type, hover, scroll, upload, read), and nesting form_record is rejected. No '
+      + 'actions (fill, click, type, hover, scroll, upload, read), and nesting form_record is rejected. Between consecutive '
+      + 'ops it pauses opDelayMs (default 400) so an op that opens a popup or starts an animation has taken effect before '
+      + 'the next runs — so a multi-step batch (open dropdown, arrow, Enter) works in one call. No '
       + 'confirmation screenshots are taken. If a frame reports truncated, the diff hit `limit` (or a huge subtree cap) — '
       + 'narrow it with form_type to filter a virtual list, or form_scroll the popup (n + dy) and record again. '
       + 'Each frame also reports `removed` (elements that already had an address and disappeared — a popup closing, '
@@ -881,6 +899,7 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
       frame: { type: 'integer', description: 'Frame id for the batch. Defaults to 0 (top document).' },
       settleMs: { type: 'integer', description: 'Quiescence window in ms — collect once the DOM is still this long. Defaults to 300.' },
       maxWaitMs: { type: 'integer', description: 'Upper bound on the wait, for pages that never settle. Defaults to 2000, capped at 10000.' },
+      opDelayMs: { type: 'integer', description: 'Pause between consecutive ops in ms, so each step (opening a popup, an animation) lands before the next runs. Defaults to 400, capped at 5000.' },
       limit: { type: 'integer', description: 'Max characters of diff HTML returned per frame. Defaults to 40000.' },
       ...TIMEOUT_PARAM,
     },
@@ -971,9 +990,12 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
       const maxWaitMs = args.maxWaitMs === undefined
         ? undefined
         : Math.max(0, Math.min(Math.round(args.maxWaitMs), 10_000))
+      const opDelayMs = args.opDelayMs === undefined
+        ? undefined
+        : Math.max(0, Math.min(Math.round(args.opDelayMs), 5_000))
       return await act(exec, {
         op: 'record', frame, ops,
-        settleMs: args.settleMs, maxWaitMs, limit: args.limit,
+        settleMs: args.settleMs, maxWaitMs, opDelayMs, limit: args.limit,
       }, requestedTimeout(args)) as unknown as {
         ops: Array<Record<string, unknown>>
         frames: RecordFrameDiff[]

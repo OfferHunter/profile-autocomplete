@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>Profile Autocomplete — 采集器 fixture</title>
+    <style>
+      /* 所有 class 名都故意取得无意义 */
+      body { font: 14px/1.7 "Microsoft YaHei", system-ui, sans-serif; max-width: 820px; margin: 24px auto; padding: 0 16px; color: #222; }
+      h1 { font-size: 20px; }
+      h2 { font-size: 15px; margin-top: 28px; padding-top: 10px; border-top: 1px solid #e2e2e2; }
+      .z1, .z2, .z3, .z4, .z9, .z10, .z11, .z12 { margin: 8px 0; }
+      label { display: inline-block; min-width: 130px; }
+      input[type="text"], input[type="email"], input[type="tel"], select, textarea { padding: 4px 6px; }
+      table { border-collapse: collapse; margin: 8px 0; }
+      th { text-align: left; font-weight: normal; padding: 6px 18px 6px 0; }
+      fieldset { margin: 10px 0; padding: 10px 14px; border: 1px solid #d5d5d5; }
+      .note { background: #f4f7ff; border-left: 3px solid #4c8dff; padding: 8px 12px; color: #445; font-size: 13px; }
+      .z10b { display: inline-block; min-width: 160px; border: 1px solid #bbb; padding: 4px 8px; cursor: pointer; }
+      .z10d { float: right; color: #888; }
+      .z10e { border: 1px solid #bbb; width: 180px; background: #fff; }
+      .z10e > div { padding: 4px 8px; cursor: pointer; }
+      .z10e > div:hover { background: #eef3ff; }
+      /* 真实的区块标题常常只是一个字号大一点的 span，没有任何语义标签 */
+      .z15a { display: block; font-size: 17px; font-weight: 600; margin: 10px 0 6px; }
+      .z16a { display: block; font-size: 17px; font-weight: 600; margin: 10px 0 6px; }
+      .z16gap { height: 620px; }
+      /* 文档标注：字号与字重都保持普通，这样不会被误认成区块标题 */
+      .doc { color: #667; font-size: 14px; font-weight: 400; margin: 28px 0 6px; padding-top: 10px; border-top: 1px solid #e2e2e2; }
+      .z18wrap { display: inline-block; }
+      .z18view { border: 1px solid #bbb; padding: 4px 8px; min-width: 150px; background: #fff; }
+      .z8 { position: relative; }
+      .z8 input[type="file"] { position: absolute; left: -9999px; width: 1px; height: 1px; }
+      .z8 button { padding: 5px 12px; cursor: pointer; }
+      iframe { width: 100%; height: 190px; border: 1px solid #d5d5d5; margin-top: 8px; }
+      code { background: #f2f2f2; padding: 1px 4px; border-radius: 3px; }
+    </style>
+  </head>
+  <body>
+    <h1>表单 fixture</h1>
+    <p class="note">
+      这个页面覆盖了各种标签关联方式与控件形态，用来验证两件事：
+      <b>快照不漏控件、地址解得回元素</b>，以及 <b>值真的写得进去、回读得到</b>。
+      所有 class 都是无意义的。快照里出现的东西一个都不许少 —— 取舍交给模型，本地不做筛选。
+    </p>
+
+    <form id="main" onsubmit="return false">
+      <h2>一、标准 label[for]</h2>
+      <div class="z1"><label for="a1">姓名</label><input id="a1" name="fullName" type="text" /></div>
+      <div class="z2"><label for="a2">电子邮箱</label><input id="a2" name="email" type="email" required /></div>
+
+      <h2>二、包裹式 label</h2>
+      <div class="z3"><label>手机号码 <input name="mobile" type="tel" /></label></div>
+
+      <h2>三、aria-label / aria-labelledby</h2>
+      <div class="z4">
+        <input aria-label="身份证号码" name="idNo" type="text" />
+        <span id="lbl-x">紧急联系人姓名</span>
+        <input aria-labelledby="lbl-x" name="ecName" type="text" />
+      </div>
+
+      <h2>四、表格布局</h2>
+      <table class="z6">
+        <tr><th>毕业院校</th><td><input name="school" type="text" /></td></tr>
+        <tr><th>所学专业</th><td><input name="major" type="text" /></td></tr>
+      </table>
+
+      <h2>五、fieldset &gt; legend 区块</h2>
+      <fieldset class="z7">
+        <legend>实习经历</legend>
+        <div><label for="w1">公司名称</label><input id="w1" name="company" type="text" /></div>
+        <div><label for="w2">职位名称</label><input id="w2" name="title" type="text" /></div>
+      </fieldset>
+
+      <h2>六、原生 select / radio / checkbox</h2>
+      <div>
+        <label for="deg">最高学历</label>
+        <select id="deg" name="degree">
+          <option value="">请选择</option>
+          <option value="bachelor">本科</option>
+          <option value="master">硕士</option>
+          <option value="phd">博士</option>
+        </select>
+      </div>
+      <div class="z13">
+        性别：
+        <label><input type="radio" name="gender" value="male" /> 男</label>
+        <label><input type="radio" name="gender" value="female" /> 女</label>
+      </div>
+      <div class="z14">
+        <label><input type="checkbox" name="agree" value="1" /> 我已阅读并同意相关条款</label>
+      </div>
+
+      <h2>七、div 假下拉框（自定义 ARIA 控件，页面自己有 JS 状态）</h2>
+      <div class="z10">
+        <span class="z10a" id="fake-lbl">期望工作城市</span>
+        <div class="z10b" role="combobox" aria-expanded="false" aria-labelledby="fake-lbl" tabindex="0">
+          <span class="z10c">请选择</span><span class="z10d">▾</span>
+        </div>
+        <div class="z10e" role="listbox" hidden>
+          <div role="option" data-value="bj">北京</div>
+          <div role="option" data-value="sh">上海</div>
+          <div role="option" data-value="sz">深圳</div>
+        </div>
+      </div>
+
+      <h2>八、模拟 React 受控组件</h2>
+      <div class="z11">
+        <label for="ctl">自我评价</label>
+        <input id="ctl" type="text" />
+      </div>
+      <p>
+        <button type="button" id="rerender">模拟重新渲染</button>
+        <span id="ctlstate">state=""</span>
+        <br />
+        <small>填完后点这个按钮：值被清空 → 说明是直接赋值（React 会丢掉）；值保留 → 说明写法正确。</small>
+      </p>
+
+      <h2>九、视觉隐藏的真实上传入口</h2>
+      <div class="z8">
+        <label for="cv">简历附件</label>
+        <input id="cv" type="file" name="resume" />
+        <button type="button" onclick="document.getElementById('cv').click()">选择文件</button>
+        <small>（真实的 file input 被挪到视口外，是真实入口，必须保留）</small>
+      </div>
+
+      <h2>十、无 label、无 aria、无 name、无 id（只能靠上下文与图判断）</h2>
+      <div class="z9">
+        <span class="z9a">期望薪资</span>
+        <input type="text" />
+        <small>← 控件本身没有任何可用来命名的属性</small>
+      </div>
+
+      <h2>十一、动态插入（验证已有元素的地址不漂移）</h2>
+      <div class="z12">
+        <div id="dynhost">
+          <div><label for="d0">原有字段</label><input id="d0" type="text" /></div>
+        </div>
+      </div>
+      <p><button type="button" id="addfield">在原有字段之前插入一个新字段</button></p>
+
+      <h2>十三、区块标题只是一个字号大点的 span（无任何语义标签）</h2>
+      <div class="z15">
+        <span class="z15a">家庭成员情况</span>
+        <div><label for="f1">成员姓名</label><input id="f1" type="text" /></div>
+        <div><label for="f2">与本人关系</label><input id="f2" type="text" /></div>
+      </div>
+
+      <!-- 用普通 div 而不是 h2，避免它被当成 fixture 自己的文档标题 -->
+      <div class="doc">十四、长区块：区块标题离字段 620px（结构上离得很远）</div>
+      <div class="z16">
+        <span class="z16a">证书与荣誉</span>
+        <div class="z16gap"></div>
+        <div><label for="g1">证书名称</label><input id="g1" type="text" /></div>
+      </div>
+
+      <!-- 真实站点（中信银行 = bootstrap-select）的结构：原生 <select> 被 CSS 设成
+           opacity:0 + width:0.5px，可见外观是紧邻的一个 <button>；同一份选项还渲染进
+           一个默认隐藏的 role=combobox / role=listbox 面板。快照要把这三者都呈现出来，
+           由模型判断该往哪儿填（填那个隐身的原生 select，而不是点假按钮）。 -->
+      <h2>十五、bootstrap-select：隐身原生 select + 关闭的选择弹层</h2>
+      <div class="z17">
+        <div><span style="color:red;">*</span>国籍/地区</div>
+        <div class="bootstrap-select">
+          <select id="nat" name="nationality" class="selectpicker" style="opacity:0;width:0.5px;height:28px">
+            <option value="">请选择</option>
+            <option value="156">中国</option>
+            <option value="840">美国</option>
+          </select>
+          <button type="button" class="dropdown-toggle" role="button" title="请选择">
+            <div class="filter-option"><div class="filter-option-inner">请选择</div></div>
+          </button>
+          <div class="dropdown-menu" role="combobox" style="display:none">
+            <div class="bs-searchbox"><input type="text" autocomplete="off" role="textbox" aria-label="Search" /></div>
+            <div class="inner" role="listbox">
+              <ul>
+                <li><a role="option"><span class="text">请选择</span></a></li>
+                <li><a role="option"><span class="text">中国</span></a></li>
+                <li><a role="option"><span class="text">美国</span></a></li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 另一类框架：直接把原生 select 设成 display:none，元素完全没有布局盒。
+           快照里没有坐标信息，但它仍然必须出现在快照里（能不能填是模型的事），
+           而且仍然必须能按地址写入。 -->
+      <h2>十六、display:none 的原生 select（零尺寸，只能靠祖先盒定位）</h2>
+      <div class="z18">
+        <div><span style="color:red;">*</span>民族</div>
+        <div class="z18wrap">
+          <select id="nation" name="nation" style="display:none">
+            <option value="">请选择</option>
+            <option value="01">汉族</option>
+          </select>
+          <div class="z18view">请选择</div>
+        </div>
+      </div>
+
+      <!-- 省市联动三联（真实简历里非常常见）：三个下拉都被 display:none 藏了，
+           可见外观由各自的兄弟 span 承担。它们是三个独立字段，快照里必须都在，
+           且都要能各自写入 —— 联动靠"填省 → 页面重新渲染市"的循环驱动。 -->
+      <div>
+        <div>籍贯</div>
+        <div style="display: flex; gap: 14px">
+          <div style="display: inline-block">
+            <select id="prov" name="prov" style="display: none">
+              <option value="">请选择</option>
+              <option value="11">北京市</option>
+              <option value="31">上海市</option>
+            </select>
+            <span style="display: inline-block; min-width: 92px; padding: 4px 8px; border: 1px solid #bbb">请选择</span>
+          </div>
+          <div style="display: inline-block">
+            <select id="city" name="city" style="display: none">
+              <option value="00">请选择市</option>
+            </select>
+            <span style="display: inline-block; min-width: 92px; padding: 4px 8px; border: 1px solid #bbb">请选择市</span>
+          </div>
+          <div style="display: inline-block">
+            <select id="dist" name="dist" style="display: none">
+              <option value="00">请选择区/县</option>
+            </select>
+            <span style="display: inline-block; min-width: 92px; padding: 4px 8px; border: 1px solid #bbb">请选择区/县</span>
+          </div>
+        </div>
+      </div>
+
+      <input type="hidden" name="csrfToken" value="should-be-filtered" />
+    </form>
+
+    <h2>十二、iframe 内的表单（验证多 frame 汇总）</h2>
+    <iframe id="child"></iframe>
+
+    <script>
+      // ---- 模拟 React 受控组件：state 才是真相，DOM 值会被回写 ----
+      const ctl = document.getElementById("ctl");
+      let ctlState = "";
+      ctl.addEventListener("input", () => {
+        ctlState = ctl.value;
+        document.getElementById("ctlstate").textContent = 'state="' + ctlState + '"';
+      });
+      document.getElementById("rerender").addEventListener("click", () => {
+        // React 重新渲染时把 DOM 值强制回写成 state
+        if (ctl.value !== ctlState) ctl.value = ctlState;
+      });
+
+      // ---- 动态插入：故意插在最前面，验证已有字段的 id 不被重排 ----
+      let dynSeq = 0;
+      document.getElementById("addfield").addEventListener("click", () => {
+        dynSeq += 1;
+        const wrap = document.createElement("div");
+        wrap.innerHTML =
+          '<label for="d' + dynSeq + '">动态字段' + dynSeq + '</label>' +
+          '<input id="d' + dynSeq + '" type="text" />';
+        const host = document.getElementById("dynhost");
+        host.insertBefore(wrap, host.firstElementChild);
+      });
+
+      // ---- iframe 表单 ----
+      document.getElementById("child").srcdoc =
+        '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><style>' +
+        'body{font:14px/1.7 "Microsoft YaHei",sans-serif;padding:12px}' +
+        'label{display:inline-block;min-width:110px}</style></head><body>' +
+        '<h2 style="font-size:14px;margin:0 0 8px">iframe 内的表单</h2>' +
+        '<div><label for="i1">推荐人姓名</label><input id="i1" type="text"></div>' +
+        '<div><label for="i2">推荐人电话</label><input id="i2" type="tel"></div>' +
+        '</body></html>';
+    </script>
+  </body>
+</html>

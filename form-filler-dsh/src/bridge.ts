@@ -106,6 +106,8 @@ export type ObserveView = {
   /** Crop around element address `n` in `frame`. */
   n?: number
   frame?: number
+  /** Pre-screenshot settle wait in ms; omitted uses the extension default (400). */
+  settleMs?: number
 }
 
 interface Client {

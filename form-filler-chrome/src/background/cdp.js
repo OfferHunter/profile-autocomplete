@@ -19,6 +19,24 @@ export { MAX_IMAGE_H };
 // 一起框进去 —— 只裁控件本身就只剩一个空框，读不出这是哪个字段。
 const CROP_PAD = 150;
 
+// 截图前先让页面把动画走完。很多控件（自定义下拉、日期弹层、折叠面板）是 CSS 过渡/
+// 动画展开的：动作刚发出就截图，拍到的是"还没展开/半开"的中间态。这个等待不改变任何
+// 页面状态，只让像素通道反映稳定后的 UI。必须放在 ensureActive **之后** —— 非激活标签页
+// 不渲染，动画是暂停的，先激活再等才有意义。
+//
+// 默认值可被每个调用覆盖（form_observe/form_look/form_fill/form_click/form_type 的 settleMs），
+// 慢动画的控件页由模型按需调大。
+const SETTLE_MS = 400;
+
+function settle(ms) {
+  return new Promise(resolve => { setTimeout(resolve, ms) });
+}
+
+/** 把调用方给的 settleMs 规整成可用值：非负有限数就用它，否则回落到默认。 */
+function normalizeSettle(ms) {
+  return Number.isFinite(ms) && ms >= 0 ? ms : SETTLE_MS;
+}
+
 // CDP 命令一律带超时。实测：captureBeyondViewport 在**非激活标签页**上不会报错，
 // 而是永不返回 —— 直接把 Agent 循环挂死。宁可超时报错，也不能让循环卡住。
 const CMD_TIMEOUT_MS = 15000;
@@ -128,8 +146,9 @@ async function shootClip(tabId, clip) {
  * 超过 MAX_IMAGE_H 的页面只给前一段，并用 coversAll/covered 如实说明，让模型知道
  * 还有多少没看到、要不要 look 下面的部分。
  */
-export async function overview(tabId, { maxH = MAX_IMAGE_H } = {}) {
+export async function overview(tabId, { maxH = MAX_IMAGE_H, settleMs } = {}) {
   const switched = await ensureActive(tabId);
+  await settle(normalizeSettle(settleMs)); // 等展开动画收尾，别拍到中间态
   const { width, height } = await contentSize(tabId);
   const h = Math.min(maxH, height);
   if (!width || h <= 0) throw new Error(`页面尺寸异常：${width}x${height}`);
@@ -140,8 +159,9 @@ export async function overview(tabId, { maxH = MAX_IMAGE_H } = {}) {
 }
 
 /** 页面任意矩形窗口的原分辨率截图，坐标是文档坐标。超出页面的部分自动夹回来。 */
-export async function region(tabId, { x, y, width, height }) {
+export async function region(tabId, { x, y, width, height, settleMs }) {
   const switched = await ensureActive(tabId);
+  await settle(normalizeSettle(settleMs)); // 等展开动画收尾，别拍到中间态
   const size = await contentSize(tabId);
   const left = Math.max(0, Math.floor(x));
   const top = Math.max(0, Math.floor(y));
@@ -162,13 +182,14 @@ export async function region(tabId, { x, y, width, height }) {
  * box 必须是**顶层文档坐标**；iframe 内元素的坐标由调用方先用 viewportBox +
  * scrollOffset 换算好（见 bridge 的边路）。
  */
-export async function cropAround(tabId, box, pad = CROP_PAD) {
+export async function cropAround(tabId, box, { pad = CROP_PAD, settleMs } = {}) {
   if (!box) throw new Error('缺少元素位置');
   return region(tabId, {
     x: box.x - pad,
     y: box.y - pad,
     width: box.width + pad * 2,
     height: box.height + pad * 2,
+    settleMs,
   });
 }
 

@@ -90,13 +90,18 @@
 
 观察绑定标签页：把**每个 frame 的完整实时 DOM**原样写入文件，并截一张整页图。
 
-- **输入**：`y`（文档 y 偏移，看下方内容）、`n`+`frame`（围绕某元素裁剪）、`timeoutMs`。
+- **输入**：`y`（文档 y 偏移，看下方内容）、`n`+`frame`（围绕某元素裁剪）、`settleMs`（截图前等 UI 稳定的毫秒数，默认 400）、`timeoutMs`。
 - **输出**：
   `{ url, title, documentId, snapshotId, pageHeight, imageId?, frames: [{ frameId, frameUrl, title, path, nodes, error? }] }`
 - **实现**：
   - service worker 向每个 frame 要快照并汇总；`snapshotId` 是本轮快照的句柄，后续 act 必须带上它。
   - 截图走 CDP `Page.captureScreenshot`（`captureBeyondViewport`），**非激活标签页会挂起**，
     所以先 `ensureActive` 激活；截图整段走全局锁，避免并发截图互相把对方踢到后台。
+  - **截图前先 `settle` 再抓**（默认 `SETTLE_MS=400`，可由 `settleMs` 按调用覆盖）：下拉/日期
+    弹层/折叠面板这些控件靠 CSS 过渡展开，动作刚发出就截图会拍到"还没展开/半开"的中间态。
+    这个等待必须放在 `ensureActive` **之后**——非激活标签页不渲染、动画是暂停的，先激活再等
+    才有意义。该延迟同时作用于整页图与裁剪图（`overview`/`region`，后者含 `form_look`/
+    `form_observe` 的 `n` 定向裁剪与各动作的确认图）。
   - 快照**不截断**：超大页面文件很大，模型应分段读（offset/limit 或 grep）。
   - 整页图登记为「full」槽（下次整页观测自动覆盖）；`n` 定向时登记为裁剪图。
 
@@ -104,7 +109,7 @@
 
 只截图、不取 DOM 快照。比 `form_observe` 便宜，用来读一个标签或复核一小块。
 
-- **输入**：`y` 或 `n`+`frame`，`timeoutMs`。
+- **输入**：`y` 或 `n`+`frame`，`settleMs`（截图前等 UI 稳定，默认 400），`timeoutMs`。
 - **输出**：`{ clip, pageHeight, imageId? }`。
 
 ### form_read
@@ -141,8 +146,8 @@
     `{ op: fill|click|type|hover|scroll|upload|read, n?, value?, text?, key?, repeat?, path?, trusted?, frame? }`。
     不允许嵌套 `record`。
   - `frame`（默认 0，作为各 op 的默认 frame）、`settleMs`（默认 300，DOM 静默多久算收）、
-    `maxWaitMs`（默认 2000，上限 10000，永动动画页兜底）、`limit`（默认 40000 字符/帧）、
-    `timeoutMs`。
+    `maxWaitMs`（默认 2000，上限 10000，永动动画页兜底）、`opDelayMs`（默认 400，上限 5000，
+    相邻 op 之间的间隔）、`limit`（默认 40000 字符/帧）、`timeoutMs`。
 - **输出**：
   `{ ops: [逐 op 回读], frames: [{ frameId, ok?, reason?, truncated?, added:[{n,tag,html}], changed:[{n,tag,changes[],html?}], removed:[{n,tag}], noChange? }], navigated? }`
   - `added`：新插入的子树，**带地址的快照 HTML**——浮层打开后从 `added` 里挑选项地址。
@@ -155,6 +160,11 @@
   - `MutationObserver` 同时收 `addedNodes` 与 `removedNodes`（属性变化限定在
     `style/class/hidden/aria-expanded/aria-hidden`）。
   - 静默判定：距最后一次变更 ≥ `settleMs` 即收；到 `maxWaitMs` 强制收。
+  - **批内 op 间隔**（`opDelayMs`，默认 400，实现在 `bridge.js` 的 `recordRun`）：相邻两个 op 之间
+    垫一段固定等待，让"打开浮层"这类异步渲染/动画先落地再发下一步。**只在步与步之间等，最后一步
+    之后不等**——收尾的 `settleMs` 静默已覆盖最后一步的稳定，因此单 op 的批（最常见的"开浮层"）
+    零额外等待。有了它，`[开下拉 → 方向键 → 回车]` 可以放进**同一个** record 一次跑完；
+    差分仍是最后一次性给出，中途每步的结果看 `ops` 里各自的回读。
   - 上限保护：窗口内记录项 `CAP=4000`；单元素子树超过 `MAX_ELEM_NODES=1500` 只报地址+属性名。
   - 与 `form_observe` 共用同一套 `data-pa-n` 地址与实时状态序列化。
 
@@ -210,7 +220,7 @@ ARIA 的子树里时才解析；普通文本框的读法一字不变、零额外
 向 `input/textarea/select/radio/checkbox/contenteditable` 写值，然后回读。
 
 - **输入**：`n`（必填）、`value`（必填；checkbox/radio 传 `"true"/"false"`）、`frame`（默认 0）、
-  `confirm`（默认 true）、`timeoutMs`。
+  `confirm`（默认 true）、`settleMs`（确认图前等 UI 稳定，默认 400）、`timeoutMs`。
 - **输出**：`ACT_WITH_ATTEMPT_SCHEMA`（动作通用字段 + `attempts`）。
 - **实现**：
   - **有内容就拒绝**：控件已有有效值（或 radio 组已选中）→ `already_filled`，不覆盖。
@@ -234,7 +244,8 @@ ARIA 的子树里时才解析；普通文本框的读法一字不变、零额外
 
 按地址点击任意元素（按钮、链接、选项、自定义控件）。
 
-- **输入**：`n`（必填）、`frame`（默认 0）、`trusted`（默认 false）、`confirm`（默认 true）、`timeoutMs`。
+- **输入**：`n`（必填）、`frame`（默认 0）、`trusted`（默认 false）、`confirm`（默认 true）、
+  `settleMs`（确认图前等 UI 稳定，默认 400）、`timeoutMs`。
 - **输出**：`ACT_WITH_ATTEMPT_SCHEMA`；带 `hitsTarget`、`hit`，trusted 时带 `point`。
 - **实现**：
   - **默认 DOM 点击**：`el.click()`（或派发合成 `MouseEvent`），按地址定位，**对 Ant Design
@@ -256,7 +267,7 @@ ARIA 的子树里时才解析；普通文本框的读法一字不变、零额外
 
 - **输入**：`n`（可选，先聚焦）、`text`（要键入的文本）、`key`（一个特殊键）、
   `repeat`（默认 1，上限 100，同一键连发次数）、`frame`（默认 0）、`confirm`（默认 true，需 n）、
-  `timeoutMs`。**`text` 与 `key` 至少给一个**。
+  `settleMs`（确认图前等 UI 稳定，默认 400）、`timeoutMs`。**`text` 与 `key` 至少给一个**。
 - **支持的键**：`Enter, Tab, Escape, ArrowDown, ArrowUp, Home, End, PageUp, PageDown, Backspace, Delete`。
 - **输出**：`ACT_RESULT_SCHEMA`。当 `n` 指向 combobox/listbox 时，`actual.activeOption` 给出
   按键后当前高亮项——用来确认"走对格了没有"。
@@ -316,6 +327,9 @@ Agent 反馈「求职意向」4 个下拉用了约 40 次调用。定位到 4 �
 | `trusted` 点击坐标不可信 | 计算出的 `point` 为 `(-9852,-9979)`，点了等于没点还关掉了浮层 | **P4**：trusted 点击**视口外直接拒绝**（`point_offscreen`）；点击回读加 `hitsTarget`/`hit` 自校验；提示词默认改「先 DOM 点击」 |
 | `form_scroll` 滚不动浮层 | 薪资列表高 4920px，`form_scroll` 只滚了窗口（`scrollY: 691`） | **P2**：`form_scroll` 支持 `n + dy` 滚元素自身容器，回 `scrollTop/scrollHeight/clientHeight` |
 | 零变更差分无信号 | 关弹窗/点开又开报不出任何东西 | **P3**：`record` 收 `removedNodes` 报 `removed`，并给 `noChange` 显式标记 |
+| 确认图拍到展开中间态 | DOM 快照有 600ms 防抖，截图却零延迟，弹层 CSS 动画没走完就抓 | **P5**：`cdp.js` 截图前 `settle(SETTLE_MS=400)`，整页图/裁剪图/确认图统一生效 |
+| 批内多步撞车 | `record` 的 op 背靠背执行，`[开下拉, 方向键, 回车]` 里按键落在浮层就绪之前 | **P6**：`recordRun` 相邻 op 之间垫 `opDelayMs`（默认 400，仅步与步之间、最后一步不等） |
+| 两个延迟写死 | 慢动画控件页希望按需调大等待 | **P5/P6 参数化**：截图的 `SETTLE_MS` 放成 `settleMs`（observe/look/fill/click/type 均可传，默认 400）；批内间隔放成 `opDelayMs`（form_record，默认 400） |
 
 配套的提示词调整（`form-filler-dsh/prompts/system.md`）：点击**先 DOM、无效再升 trusted**；
 虚拟列表用 `form_type` 的 `repeat` 与 `form_scroll` 的 `dy`，并按 `activeOption` 核对落点。
@@ -333,12 +347,12 @@ Ant Design / Element / bootstrap-select / 级联弹窗各自的"开法"编码进
 | `form-filler-chrome/src/content/act.js` | `readState` 增强 `activeOption`；新增命中自校验 `hitTest`；`click` 回带 `hitsTarget/hit`；`scroll` 支持 `dy`；dispatch 增 `hit_test` |
 | `form-filler-chrome/src/content/dom.js` | 新增只读地址查询 `numIfKnown`（不分配新地址） |
 | `form-filler-chrome/src/content/record.js` | 记录 `removedNodes`，输出 `removed` 与 `noChange` |
-| `form-filler-chrome/src/background/cdp.js` | 补 `Home/End/PageUp/PageDown`；新增 `viewportSize` |
-| `form-filler-chrome/src/background/bridge.js` | `type` 支持 `repeat`；trusted 点击视口外拒绝 + 附命中自校验；`scroll` 透传 `dy` |
-| `form-filler-dsh/src/tools.ts` | `form_type` 加 `repeat`；`form_scroll` 加 `dy`；`record` op 加 `repeat`；输出 schema 增相应字段与 `removed/noChange`；更新工具描述 |
+| `form-filler-chrome/src/background/cdp.js` | 补 `Home/End/PageUp/PageDown`；新增 `viewportSize`；截图前 `settle(SETTLE_MS=400)`（P5），并允许按调用覆盖（`settleMs`） |
+| `form-filler-chrome/src/background/bridge.js` | `type` 支持 `repeat`；trusted 点击视口外拒绝 + 附命中自校验；`scroll` 透传 `dy`；`record` 相邻 op 之间垫 `opDelayMs`（P6）；截图透传 `settleMs` |
+| `form-filler-dsh/src/tools.ts` | `form_type` 加 `repeat`；`form_scroll` 加 `dy`；`record` op 加 `repeat`；输出 schema 增相应字段与 `removed/noChange`；出图工具加 `settleMs`、`form_record` 加 `opDelayMs`；更新工具描述 |
 | `form-filler-dsh/src/bridge.ts` | `ActResult` 补类型字段 |
 | `form-filler-dsh/prompts/system.md` | DOM-first 点击；虚拟列表用法 |
-| `form-filler-chrome/test/verify-dom.mjs` | 新增 9 条针对 P1–P4 的回归断言（该目录被 `.gitignore` 忽略，属本地测试） |
+| `form-filler-chrome/tests/verify-dom.mjs` | 新增 9 条针对 P1–P4 的回归断言 |
 
 ---
 
@@ -356,8 +370,9 @@ Ant Design / Element / bootstrap-select / 级联弹窗各自的"开法"编码进
 ## 7. 测试
 
 - DSH 插件回归（33 用例）：在 `form-filler-dsh/` 下用 harness 的 vitest 运行。
-- 扩展侧 DOM/动作回归：`node form-filler-chrome/test/verify-dom.mjs`（需本机 Edge）。
+- 扩展侧 DOM/动作回归：`node form-filler-chrome/tests/verify-dom.mjs`（需本机 Edge）。
   直接操纵 `window.__PA.act.dispatch(...)` 断言快照与动作行为。
-  注意 `form-filler-chrome/test/` 被 `.gitignore` 忽略，是**本地测试**，不随仓库分发。
+  同目录还有 `verify-scan.mjs`（scan 枚举与批量写）、`verify-extension.mjs`（整链路）、
+  `iframe-probe.mjs`（iframe 的 CDP 能力）；均为需真浏览器的手动集成测试，不进 `npm test`。
   > 现有基线有 7 条历史遗留失败（`force` 覆盖 / 快照截断特性——这些特性在代码里已移除但
   > 断言仍在），与本轮改动无关。本轮新增的 9 条断言全部通过（48 → 57 passed）。

@@ -1,10 +1,6 @@
 node_modules
 .claude
-test
 workspace
-.venv/
-__pycache__/
-*.pyc
-data/
 .env
-.pytest_cache/
+# 本地保存的真实站点等大体积手测夹具，不被跟踪
+form-filler-chrome/tests/local/

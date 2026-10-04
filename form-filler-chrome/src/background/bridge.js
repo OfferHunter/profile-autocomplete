@@ -65,6 +65,7 @@ async function topDocumentId(tabId) {
 // 返回），并发截图会互相把对方踢到后台。不吃前台的 DOM 操作不在此锁内，可跨标签页并行。
 function capture(tab, view, topDocumentId) {
   const frame = view.frame || 0;
+  const settleMs = view.settleMs;
   const run = captureLock.then(async () => {
     await cdp.attach(tab.id);
     try {
@@ -73,17 +74,17 @@ function capture(tab, view, topDocumentId) {
         if (frame === 0) {
           const box = await act(tab.id, 0, topDocumentId, { op: 'box', n: view.n });
           if (box.ok && box.box && box.box.top !== false) {
-            try { shot = await cdp.cropAround(tab.id, box.box); } catch { /* 退到整页 */ }
+            try { shot = await cdp.cropAround(tab.id, box.box, { settleMs }); } catch { /* 退到整页 */ }
           }
         } else {
-          try { shot = await cropAroundFrame(tab.id, frame, view.n); } catch { /* 退到整页 */ }
+          try { shot = await cropAroundFrame(tab.id, frame, view.n, settleMs); } catch { /* 退到整页 */ }
         }
       }
       if (!shot && view.y > 0) {
         const size = await cdp.contentSize(tab.id);
-        shot = await cdp.region(tab.id, { x: 0, y: Math.min(view.y, Math.max(0, size.height - 1)), width: size.width, height: 2000 });
+        shot = await cdp.region(tab.id, { x: 0, y: Math.min(view.y, Math.max(0, size.height - 1)), width: size.width, height: 2000, settleMs });
       }
-      if (!shot) shot = await cdp.overview(tab.id);
+      if (!shot) shot = await cdp.overview(tab.id, { settleMs });
       return shot;
     } finally {
       await cdp.detach(tab.id);
@@ -144,7 +145,7 @@ async function trustedPointer(tabId, frame, n, kind) {
 
 // 子 frame 元素的定向裁剪：把地址翻译成 CDP 节点，取其顶层视口坐标，加上顶层滚动
 // 换算成顶层文档坐标（captureScreenshot 的 clip 吃文档坐标）。
-async function cropAroundFrame(tabId, frame, n) {
+async function cropAroundFrame(tabId, frame, n, settleMs) {
   const marked = await act(tabId, frame, undefined, { op: 'mark', n });
   if (!marked.ok) throw new Error(marked.message || '临时记号失败');
   try {
@@ -154,7 +155,7 @@ async function cropAroundFrame(tabId, frame, n) {
     const box = await cdp.viewportBox(tabId, nodeId);
     if (!box) throw new Error('元素没有可裁的尺寸');
     const scroll = await cdp.scrollOffset(tabId);
-    return await cdp.cropAround(tabId, { x: box.x + scroll.x, y: box.y + scroll.y, width: box.width, height: box.height });
+    return await cdp.cropAround(tabId, { x: box.x + scroll.x, y: box.y + scroll.y, width: box.width, height: box.height }, { settleMs });
   } finally {
     try { await act(tabId, frame, undefined, { op: 'unmark', mark: marked.mark }); } catch { /* 页面可能已导航 */ }
   }
@@ -202,6 +203,12 @@ async function uploadFile(tabId, frame, call) {
   }
 }
 
+// 批内 op 之间的默认间隔：上一步（如点开下拉）多半触发异步渲染/CSS 动画，下一步若紧接着
+// 发出（按方向键、回车）会落在控件就绪之前。给每步之间垫一段固定等待，让上一步先落地。
+// 只在**步与步之间**等，不在最后一步之后等 —— 收尾的 DOM 静默（collect 的 settleMs）已经
+// 覆盖了最后一步的稳定；单 op 的批（最常见的"开浮层"）因此一秒都不多等。
+const OP_DELAY_MS = 400;
+
 // 把一批操作包起来跑，只回报它们引起的 DOM 变化：arm 各 frame → 按序跑 ops → collect 各 frame。
 // ops 复用 runAct 的既有分派（含 trusted 走 CDP），行为与单条操作完全一致；禁止嵌套 record。
 async function recordRun(tabId, frame, call) {
@@ -209,12 +216,14 @@ async function recordRun(tabId, frame, call) {
   if (!observed) return { ok: false, reason: 'stale_snapshot' };
   const frames = observed.frames;
   const ops = Array.isArray(call.ops) ? call.ops : [];
+  const opDelayMs = Number.isFinite(call.opDelayMs) && call.opDelayMs >= 0 ? call.opDelayMs : OP_DELAY_MS;
 
   const before = await topDocumentId(tabId);
   await Promise.all(frames.map(f => domAct(tabId, f, { op: 'record_arm' }).catch(() => null)));
 
   const results = [];
-  for (const op of ops) {
+  for (let i = 0; i < ops.length; i++) {
+    const op = ops[i];
     if (!op || !ACT_OPS.has(op.op) || op.op === 'record') {
       results.push({ ok: false, reason: 'bad_op', message: `record 不支持的操作 ${op && op.op}` });
       continue;
@@ -225,6 +234,7 @@ async function recordRun(tabId, frame, call) {
     } catch (e) {
       results.push({ ok: false, reason: 'exception', message: String((e && e.message) || e) });
     }
+    if (i < ops.length - 1 && opDelayMs > 0) await new Promise(resolve => { setTimeout(resolve, opDelayMs) });
   }
 
   const collected = await Promise.all(frames.map(f => domAct(tabId, f, {
