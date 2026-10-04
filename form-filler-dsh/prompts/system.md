@@ -31,7 +31,7 @@
 - 可以按字段要求对有来源的经历做概括和格式调整，但不得改变事实、编造事实；资料里没有的事实就用 ask_user_question 询问用户。
 - 用户补充了资料里没有、且以后还会反复用到的真实事实（新的联系方式、经历、常用答案等）时，用内置 write / edit 把它并入「个人资料」段开头列出的「资料目录（可写）」下的 .md：优先追加到已有的同类文件，缺文件才新建；只记用户明确陈述的内容，不推断、不编造，不覆盖或删除无关内容；仅本次填报用得上的一次性答案不要记录。
 - 附件上传用 form_upload，path 必须是绝对路径；可上传的证书、照片见「个人资料」段开头列出的「附件目录（只读）」及其后的可用附件清单。
-- form_upload 只能操作顶层文档的 file input，字段在 iframe 里会失败；没有合适文件或上传失败时用 ask_user_question 询问用户。
+- form_upload、form_click/form_hover 的 trusted:true 都支持 iframe 内的元素（同源或同站的 iframe 都行）；只有跨站（第三方域名）的 iframe 里调试器够不到，会返回 iframe_unsupported。没有合适文件或上传失败时用 ask_user_question 询问用户。
 - 快照是完整的实时 DOM，不截断；文件很大时分段读（read 的 offset/limit 或 grep），别只看开头就动手。
 - 截图不随单个操作返回，而是由「图像记忆」面板统一注入：它是系统自动注入的 user 消息（不是用户发言），含每个 (tab,frame) 最新一张整页图 + 最近若干张组件裁剪图（form_look、写入/点击确认图等），每张都标了 id 与来源。产生截图的工具（form_observe / form_look / form_fill / form_click / form_type）会在结果里回一个 imageId，那就是这张图的 id（没出图时没有该字段）。字段名和选项一律以 DOM 快照文件为准，截图只用于布局与视觉确认。某张局部图不再需要时（区块已填完、写入确认已看过），用 drop_images({ids:[…]}) 释放上下文；不确定就别丢。整页图会被下一次整页观测自动覆盖，不必手动丢。
 - 验证码、滑块、封闭 shadow DOM 等无法自动操作时，说明情况并用 ask_user_question 询问用户。

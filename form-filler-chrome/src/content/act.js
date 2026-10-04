@@ -307,14 +307,13 @@
     }
   }
 
-  // 文件上传的临时记号：地址只存在于本模块的 Map 里，CDP 拿不到；给目标元素打一个
-  // 短命属性，宿主据此取到 CDP 节点后立刻 unmark。只允许 file 输入框。
+  // CDP 交接用的临时记号：地址（data-pa-n）只存在于本模块的 Map 里，CDP 拿不到。
+  // 给目标元素打一个短命、随机的真属性，宿主据此用 DOM.performSearch 在整棵 frame
+  // 树里把它找回来（文件上传/真实鼠标事件都要先拿到 CDP 节点），用完立刻 unmark。
+  // 任何元素都可以打 —— 这些动作不限于 file 输入框。
   function mark(n) {
     const r = resolve(n);
     if (r.error) return { ok: false, reason: 'stale_address', message: r.error };
-    if (!r.el.matches('input[type=file]')) {
-      return { ok: false, reason: 'not_file_input', message: '目标不是文件输入框 input[type=file]' };
-    }
     const token = `pa${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
     r.el.setAttribute('data-pa-mark', token);
     return { ok: true, mark: token };

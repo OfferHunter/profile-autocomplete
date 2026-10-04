@@ -333,6 +333,23 @@ describe('form-filler tools with an attachment store', () => {
       command => command.op === 'act' && (command as { call?: { op?: string } }).call?.op === 'fill_many',
     )
     expect(batched).toHaveLength(2)
+
+    // A batch-level frame defaults every item that omits its own; an item's own
+    // frame wins. Grouping still goes by first-seen frame.
+    const mixed = value(await call('form_fill_batch', {
+      frame: 1,
+      items: [
+        { n: 4, value: '王五', frame: 0 },
+        { n: 5, value: '赵六' },
+      ],
+    }))
+    expect((mixed.results as Array<Record<string, unknown>>).map(item => [item.frame, item.n]))
+      .toEqual([[0, 4], [1, 5]])
+    const mixedFrames = extension!.commands
+      .filter(command => command.op === 'act' && (command as { call?: { op?: string } }).call?.op === 'fill_many')
+      .slice(2)
+      .map(command => (command as { call: { frame: number } }).call.frame)
+    expect(mixedFrames).toEqual([0, 1])
   })
 
   it('form_record forwards a batch and returns the per-frame diff', async () => {

@@ -159,12 +159,11 @@ export async function region(tabId, { x, y, width, height }) {
 /**
  * 围绕一个元素裁图。这是实测唯一对全部字号（含 10.5px）100% 可靠的识别通道，
  * 也是每次填完让模型当场确认"填对没有"的手段，所以绕元素扩一圈。
+ * box 必须是**顶层文档坐标**；iframe 内元素的坐标由调用方先用 viewportBox +
+ * scrollOffset 换算好（见 bridge 的边路）。
  */
 export async function cropAround(tabId, box, pad = CROP_PAD) {
   if (!box) throw new Error('缺少元素位置');
-  if (box.top === false) {
-    throw new Error('这个字段在 iframe 里，裁剪图只支持顶层文档的字段。请改用 read_dom / search_dom 核对。');
-  }
   return region(tabId, {
     x: box.x - pad,
     y: box.y - pad,
@@ -177,18 +176,79 @@ export async function cropAround(tabId, box, pad = CROP_PAD) {
 //
 // 国企网申里 jquery.autocomplete / 日期控件 / 富文本只认 isTrusted 的事件，
 // el.dispatchEvent 派发的合成事件它们不理。这些接口用 CDP 造真事件。
-// 坐标一律吃**视口坐标**（getBoundingClientRect），不是文档坐标。
+// 坐标一律吃**顶层视口**坐标（视口左上是原点），不是文档坐标，也不是 frame 局部坐标。
 
 const MOUSE_BUTTON = 'left';
 const CLICK_COUNT = 1;
 
-function viewportPoint(rect) {
-  return { x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2) };
+/**
+ * 把一个 data-pa-mark 记号翻译成 CDP 的 nodeId。
+ * 地址（data-pa-n）只活在内容脚本的 Map 里，CDP 不认识；内容脚本会先在目标元素上
+ * 打一个 data-pa-mark=<token> 的真属性。DOM.performSearch 是 DevTools 那个搜索，
+ * 会**顺着 frame 树往下搜**（同进程的 frame 都覆盖），所以子 frame 里的元素也找得到
+ * —— 这正是它比顶层 Runtime.evaluate 强的地方。
+ * @returns nodeId；找不到（元素已被重渲染，或它在跨站 OOPIF 里、主会话看不到）时为 0。
+ */
+export async function findMarkedNode(tabId, token) {
+  await send(tabId, 'DOM.enable').catch(() => {});
+  // 必须先要一次 getDocument（只要根节点，depth:0）把 DOM 代理的节点表初始化 ——
+  // 否则 performSearch 返回的 nodeId 是悬空的，后面 setFileInputFiles/getContentQuads
+  // 一律报 "Could not find node with given id"（实测）。
+  await send(tabId, 'DOM.getDocument', { depth: 0 });
+  const { searchId, resultCount } = await send(tabId, 'DOM.performSearch', {
+    query: `[data-pa-mark="${token}"]`,
+  });
+  try {
+    if (!resultCount) return 0;
+    const { nodeIds } = await send(tabId, 'DOM.getSearchResults', {
+      searchId, fromIndex: 0, toIndex: resultCount,
+    });
+    return nodeIds && nodeIds.length ? nodeIds[0] : 0;
+  } finally {
+    await send(tabId, 'DOM.discardSearchResults', { searchId }).catch(() => {});
+  }
 }
 
-/** 把指针移到元素中心（真实 mouseMoved）。用于 hover 菜单/提示。 */
-export async function moveTo(tabId, rect) {
-  const point = viewportPoint(rect);
+/** 把节点滚入视野。本来就在视野内、或不在可滚动容器里时静默返回。 */
+export async function scrollIntoView(tabId, nodeId) {
+  await send(tabId, 'DOM.scrollIntoViewIfNeeded', { nodeId }).catch(() => {});
+}
+
+/**
+ * 节点在**顶层视口**里的外接矩形（CSS 像素）。
+ * DOM.getContentQuads 由浏览器自己算出节点在顶层视口的位置 —— 各级 iframe 的偏移与
+ * 滚动都已算进去，所以我们不碰坐标数学。inline 元素可能返回多个 quad，取面积最大的
+ * 那个。@returns 矩形；节点没有可交互尺寸（未渲染等）时为 null。
+ */
+export async function viewportBox(tabId, nodeId) {
+  const { quads } = await send(tabId, 'DOM.getContentQuads', { nodeId });
+  if (!quads || !quads.length) return null;
+  let best = null;
+  for (const q of quads) {
+    const xs = [q[0], q[2], q[4], q[6]];
+    const ys = [q[1], q[3], q[5], q[7]];
+    const x = Math.min(...xs);
+    const y = Math.min(...ys);
+    const box = { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
+    if (!best || box.width * box.height > best.width * best.height) best = box;
+  }
+  return best;
+}
+
+/** 顶层文档的滚动偏移。getContentQuads 吃视口坐标，captureScreenshot 的 clip 吃文档坐标，差这一档。 */
+export async function scrollOffset(tabId) {
+  const m = await send(tabId, 'Page.getLayoutMetrics');
+  const v = m.cssLayoutViewport || m.layoutViewport;
+  return { x: v ? v.pageX : 0, y: v ? v.pageY : 0 };
+}
+
+/** 矩形中心（顶层视口坐标），四舍五入到整数像素。 */
+export function centerOf(box) {
+  return { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2) };
+}
+
+/** 把指针移到顶层视口里的一个点（真实 mouseMoved）。用于 hover 菜单/提示。 */
+export async function moveToPoint(tabId, point) {
   await send(tabId, 'Input.dispatchMouseEvent', {
     type: 'mouseMoved', x: point.x, y: point.y, buttons: 0,
   });
@@ -196,11 +256,11 @@ export async function moveTo(tabId, rect) {
 }
 
 /**
- * 真实鼠标点击：移到中心后按下再抬起。坐标是视口坐标，调用方要先保证元素
- * 已滚入视野（否则点到的位置在视口外，事件照样发出但落不到元素上）。
+ * 在顶层视口里的一个点上做真实鼠标点击：移到该点后按下再抬起。
+ * iframe 内元素的坐标已由 viewportBox 换算成顶层视口坐标 —— 浏览器按坐标路由输入，
+ * 跨 iframe 也能落到正确的元素上。调用方要先保证元素已滚入视野。
  */
-export async function realClick(tabId, rect) {
-  const point = viewportPoint(rect);
+export async function realClickAt(tabId, point) {
   await send(tabId, 'Input.dispatchMouseEvent', {
     type: 'mouseMoved', x: point.x, y: point.y, buttons: 0,
   });
@@ -245,18 +305,11 @@ export async function pressKey(tabId, name) {
 }
 
 /**
- * 给一个 file input 挂上本地文件。CDP 只认 nodeId/backendNodeId/objectId，
- * 而地址（data-pa-n）只存在于 content script 的 Map 里，所以由 content script
- * 先给目标元素打一个临时记号，这里用记号取到节点后再上传，随之由调用方清除记号。
- * 只支持顶层文档：跨 frame 取 objectId 会落到另一个 execution context。
+ * 给一个 file input 挂上本地文件。调用方先用 findMarkedNode 把记号换成 nodeId
+ * （那一步会 DOM.enable），这里只管把文件挂上去。nodeId 不分 frame ——
+ * 子 frame 里的 file input 一样能挂。
  */
-export async function setFiles(tabId, token, path) {
-  await send(tabId, 'Runtime.enable').catch(() => {});
-  const expression = `document.querySelector('[data-pa-mark="${token}"]')`;
-  const found = await send(tabId, 'Runtime.evaluate', { expression, returnByValue: false });
-  const objectId = found && found.result && found.result.objectId;
-  if (!objectId) throw new Error('找不到要上传的文件框（可能已被页面重新渲染），请重新观察后再试');
-  await send(tabId, 'DOM.enable').catch(() => {});
-  await send(tabId, 'DOM.setFileInputFiles', { files: [path], objectId });
+export async function setFiles(tabId, nodeId, path) {
+  await send(tabId, 'DOM.setFileInputFiles', { files: [path], nodeId });
   return { ok: true, files: [path] };
 }

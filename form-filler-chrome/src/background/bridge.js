@@ -64,14 +64,19 @@ async function topDocumentId(tabId) {
 // 整段套全局锁：截图独占"前台标签页"（非前台标签页的 captureBeyondViewport 会永不
 // 返回），并发截图会互相把对方踢到后台。不吃前台的 DOM 操作不在此锁内，可跨标签页并行。
 function capture(tab, view, topDocumentId) {
+  const frame = view.frame || 0;
   const run = captureLock.then(async () => {
     await cdp.attach(tab.id);
     try {
       let shot;
-      if (view.n != null && (view.frame || 0) === 0 && topDocumentId) {
-        const box = await act(tab.id, 0, topDocumentId, { op: 'box', n: view.n });
-        if (box.ok && box.box && box.box.top !== false) {
-          try { shot = await cdp.cropAround(tab.id, box.box); } catch { /* 退到整页 */ }
+      if (view.n != null && topDocumentId) {
+        if (frame === 0) {
+          const box = await act(tab.id, 0, topDocumentId, { op: 'box', n: view.n });
+          if (box.ok && box.box && box.box.top !== false) {
+            try { shot = await cdp.cropAround(tab.id, box.box); } catch { /* 退到整页 */ }
+          }
+        } else {
+          try { shot = await cropAroundFrame(tab.id, frame, view.n); } catch { /* 退到整页 */ }
         }
       }
       if (!shot && view.y > 0) {
@@ -99,17 +104,48 @@ function domAct(tabId, frame, call) {
   return act(tabId, frame.frameId, frame.documentId, call);
 }
 
-// CDP 真实鼠标事件吃视口坐标，且只对顶层文档有效（iframe 内元素换算坐标需要跨级
-// 累加 iframe 位置与滚动，跨域时拿不到）。
-async function trustedPointer(tabId, frame, n, action) {
-  const box = await domAct(tabId, frame, { op: 'box', n });
-  if (!box.ok) return box;
-  if (box.box.top === false) {
-    return { ok: false, reason: 'iframe_unsupported', message: '真实鼠标事件暂不支持 iframe 内元素；先试 trusted=false 的 DOM 版本' };
-  }
+// CDP 真实鼠标事件吃**顶层视口**坐标。iframe 内元素不再拒绝：把手里的地址翻译成
+// CDP 节点，让浏览器自己把它在顶层视口里的位置算出来（getContentQuads），再按坐标
+// 派发 —— 各级 iframe 的偏移与滚动由浏览器处理，我们不做坐标数学。
+async function trustedPointer(tabId, frame, n, kind) {
+  const marked = await domAct(tabId, frame, { op: 'mark', n });
+  if (!marked.ok) return marked;
   await cdp.attach(tabId);
-  try { return await action(tabId, box.box.viewport); }
-  finally { await cdp.detach(tabId); }
+  try {
+    const nodeId = await cdp.findMarkedNode(tabId, marked.mark);
+    if (!nodeId) {
+      return {
+        ok: false, reason: 'iframe_unsupported',
+        message: '调试器够不到这个元素：它可能已被页面重渲染，或在跨站(第三方域名)的 iframe 里。先试 trusted=false 的 DOM 版本。',
+      };
+    }
+    await cdp.scrollIntoView(tabId, nodeId);
+    const box = await cdp.viewportBox(tabId, nodeId);
+    if (!box) return { ok: false, reason: 'not_interactable', message: '元素没有可交互的尺寸（未渲染或已隐藏）' };
+    const point = cdp.centerOf(box);
+    return kind === 'click' ? await cdp.realClickAt(tabId, point) : await cdp.moveToPoint(tabId, point);
+  } finally {
+    try { await domAct(tabId, frame, { op: 'unmark', mark: marked.mark }); } catch { /* 页面可能已导航 */ }
+    await cdp.detach(tabId);
+  }
+}
+
+// 子 frame 元素的定向裁剪：把地址翻译成 CDP 节点，取其顶层视口坐标，加上顶层滚动
+// 换算成顶层文档坐标（captureScreenshot 的 clip 吃文档坐标）。
+async function cropAroundFrame(tabId, frame, n) {
+  const marked = await act(tabId, frame, undefined, { op: 'mark', n });
+  if (!marked.ok) throw new Error(marked.message || '临时记号失败');
+  try {
+    const nodeId = await cdp.findMarkedNode(tabId, marked.mark);
+    if (!nodeId) throw new Error('调试器够不到这个元素');
+    await cdp.scrollIntoView(tabId, nodeId);
+    const box = await cdp.viewportBox(tabId, nodeId);
+    if (!box) throw new Error('元素没有可裁的尺寸');
+    const scroll = await cdp.scrollOffset(tabId);
+    return await cdp.cropAround(tabId, { x: box.x + scroll.x, y: box.y + scroll.y, width: box.width, height: box.height });
+  } finally {
+    try { await act(tabId, frame, undefined, { op: 'unmark', mark: marked.mark }); } catch { /* 页面可能已导航 */ }
+  }
 }
 
 async function typeInto(tabId, frame, call) {
@@ -132,14 +168,18 @@ async function typeInto(tabId, frame, call) {
 }
 
 async function uploadFile(tabId, frame, call) {
-  if ((frame.frameId || 0) !== 0) {
-    return { ok: false, reason: 'iframe_unsupported', message: '文件上传只支持顶层文档' };
-  }
   const marked = await domAct(tabId, frame, { op: 'mark', n: call.n });
   if (!marked.ok) return marked;
   await cdp.attach(tabId);
   try {
-    return await cdp.setFiles(tabId, marked.mark, call.path);
+    const nodeId = await cdp.findMarkedNode(tabId, marked.mark);
+    if (!nodeId) {
+      return {
+        ok: false, reason: 'iframe_unsupported',
+        message: '调试器找不到要上传的文件框：它可能已被页面重渲染，或在跨站(第三方域名)的 iframe 里。请重新观察后再试。',
+      };
+    }
+    return await cdp.setFiles(tabId, nodeId, call.path);
   } finally {
     try { await domAct(tabId, frame, { op: 'unmark', mark: marked.mark }); } catch { /* 页面可能已导航 */ }
     await cdp.detach(tabId);
@@ -183,8 +223,8 @@ async function recordRun(tabId, frame, call) {
 
 async function runAct(tabId, frame, call) {
   if (call.op === 'record') return recordRun(tabId, frame, call);
-  if (call.op === 'click' && call.trusted === true) return trustedPointer(tabId, frame, call.n, cdp.realClick);
-  if (call.op === 'hover' && call.trusted === true) return trustedPointer(tabId, frame, call.n, cdp.moveTo);
+  if (call.op === 'click' && call.trusted === true) return trustedPointer(tabId, frame, call.n, 'click');
+  if (call.op === 'hover' && call.trusted === true) return trustedPointer(tabId, frame, call.n, 'hover');
   if (call.op === 'type') return typeInto(tabId, frame, call);
   if (call.op === 'upload') return uploadFile(tabId, frame, call);
   // scan / fill_many 原样把整个 call 交给对应 frame 的 content script。

@@ -699,7 +699,8 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
 
   ctx.tools.register(defineTool({
     name: 'form_upload',
-    description: 'Attach a local file to a file input at address n via the debugger. Use an absolute path.',
+    description: 'Attach a local file to a file input at address n via the debugger. Use an absolute path. '
+      + 'Works for file inputs inside iframes on the same site; only a cross-site (third-party) iframe is out of reach.',
     parameters: {
       n: { type: 'integer', required: true, description: 'File input address from the snapshot.' },
       path: { type: 'string', required: true, description: 'Absolute path to the file to attach.' },
@@ -940,7 +941,8 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
       + 'per-item readback. Value semantics match form_fill ("true"/"false" for a checkbox/radio; option label or value for a '
       + 'native select). Items whose control already holds a valid value are skipped (no override); controls form_fill cannot '
       + 'write — custom widgets, disabled, hidden — are rejected with a reason, so fill those with form_click / form_type. '
-      + 'No confirmation screenshots are taken; form_observe afterward to verify.',
+      + 'Items are grouped by frame and each frame is one round trip; set the batch-level frame to default every item that '
+      + 'omits its own. No confirmation screenshots are taken; form_observe afterward to verify.',
     parameters: {
       items: {
         type: 'array', required: true,
@@ -950,10 +952,11 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
           properties: {
             n: { type: 'integer', required: true, description: 'Element address from the snapshot.' },
             value: { type: 'string', required: true, description: 'Value to write; "true"/"false" for checkbox/radio.' },
-            frame: { type: 'integer', description: 'Frame id. Defaults to 0.' },
+            frame: { type: 'integer', description: 'Frame id for this item; overrides the batch-level frame.' },
           },
         },
       },
+      frame: { type: 'integer', description: 'Default frame id for items that omit their own. Defaults to 0.' },
       ...TIMEOUT_PARAM,
     },
     output: {
@@ -979,7 +982,7 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
     async execute(args, exec) {
       const groups = new Map<number, Array<{ n: number; value: string }>>()
       for (const item of args.items as Array<{ n: number; value: string; frame?: number }>) {
-        const frame = item.frame ?? 0
+        const frame = item.frame ?? args.frame ?? 0
         const group = groups.get(frame)
         if (group === undefined) groups.set(frame, [{ n: item.n, value: item.value }])
         else group.push({ n: item.n, value: item.value })
