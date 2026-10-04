@@ -61,8 +61,25 @@ export function registerPrompt(ctx: Context, options: PromptOptions): void {
     name: 'form-filler:profile',
     order: PROFILE_ORDER,
     interpolate: false,
-    text: () => readProfile(options.knowledgeDir, options.attachmentsDir),
+    // Anchor the relative profile/attachment dirs to the session's own working
+    // directory on every assembly. Resolving against process.cwd() instead would
+    // miss the workspace: the CLI runs with the package dir as cwd and never
+    // chdirs, so the model would see an empty profile and read the files itself.
+    text: context => readProfile(
+      resolve(sessionCwd(context), options.knowledgeDir),
+      resolve(sessionCwd(context), options.attachmentsDir),
+    ),
   })
+}
+
+/**
+ * The session working directory for one prompt assembly, used to anchor the
+ * relative profile and attachment directories. Falls back to the process cwd
+ * when no agent is attached (diagnostic assemblies).
+ */
+function sessionCwd(context: unknown): string {
+  const agent = (context as { agent?: { session?: { header?: { cwd?: string } } } } | undefined)?.agent
+  return agent?.session?.header?.cwd ?? process.cwd()
 }
 
 /**

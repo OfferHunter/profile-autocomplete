@@ -193,6 +193,17 @@ function sessionKey(exec: ToolExecution): string {
   return typeof id === 'string' ? id : 'default'
 }
 
+/**
+ * The session working directory, used to anchor the relative run dir. Falls
+ * back to the process cwd when no agent is attached: the CLI runs with the
+ * package dir as cwd, so process.cwd() alone would write snapshots beside the
+ * harness sources instead of under the workspace.
+ */
+function sessionCwd(exec: ToolExecution): string {
+  const cwd = (exec.agent as { session?: { header?: { cwd?: string } } } | undefined)?.session?.header?.cwd
+  return cwd ?? process.cwd()
+}
+
 /** Re-brand a stored image value into the durable reference an image block carries. */
 function imageRef(value: ImageValue): ImageAttachmentRef {
   return {
@@ -217,9 +228,9 @@ function json(value: unknown): ContentBlock[] {
  */
 export function registerTools(ctx: Context, options: ToolsOptions): void {
   const { bridge, runDir, memory } = options
-  // The frame index must hand the model absolute paths, so anchor the relative
-  // run dir to the session working directory once here.
-  const snapshotRoot = resolve(runDir)
+  // The frame index hands the model absolute paths, so anchor the relative run
+  // dir to the session's own working directory per call (see sessionCwd).
+  const snapshotRootOf = (exec: ToolExecution): string => resolve(sessionCwd(exec), runDir)
   const sessions = new Map<string, SessionState>()
 
   /** The session owning this tool call, required for recording images and pruning. */
@@ -439,7 +450,7 @@ export function registerTools(ctx: Context, options: ToolsOptions): void {
       }, exec.signal, requestedTimeout(args)) as ObserveResult
       state.snapshotId = observation.snapshot
 
-      const dir = join(snapshotRoot, sessionKey(exec), observation.snapshot)
+      const dir = join(snapshotRootOf(exec), sessionKey(exec), observation.snapshot)
       await mkdir(dir, { recursive: true })
       const frames: FrameIndex[] = []
       for (const frame of observation.frames) {

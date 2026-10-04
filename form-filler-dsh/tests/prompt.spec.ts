@@ -80,6 +80,22 @@ describe('readProfile', () => {
     expect(text).not.toContain('nested')
   })
 
+  it('resolves a relative profile dir against the session working directory', async () => {
+    const dir = await tempDir()
+    await mkdir(join(dir, 'knowledge'))
+    await writeFile(join(dir, 'knowledge', 'a.md'), '姓名：张三\n')
+    const sections: Array<{ name: string; text: unknown }> = []
+    const ctx = {
+      systemPrompt: { section: (section: { name: string; text: unknown }) => { sections.push(section) } },
+    } as unknown as Context
+    registerPrompt(ctx, { knowledgeDir: 'knowledge', attachmentsDir: 'attachments' })
+    const text = sections.find(section => section.name === 'form-filler:profile')!.text as (context: unknown) => string
+    // The session cwd anchors the relative dir, not process.cwd().
+    expect(text({ agent: { session: { header: { cwd: dir } } } })).toContain('姓名：张三')
+    // Without a session the relative dir is not found, so nothing is injected.
+    expect(text({})).not.toContain('姓名：张三')
+  })
+
   it('truncates a profile beyond the character limit with a visible warning', async () => {
     const dir = await tempDir()
     await writeFile(join(dir, 'huge.md'), 'x'.repeat(100_100))
